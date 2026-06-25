@@ -375,7 +375,9 @@ private struct TaskRow: View {
                 .help(task.isBacklog ? "Backlog" : (task.doneThisLoop ? "Reopen" : "Done"))
 
                 Button {
-                    if task.linkedApp == nil {
+                    if !task.isBacklog && !task.doneThisLoop {
+                        store.focus(task)
+                    } else if task.linkedApp == nil {
                         onEdit()
                     } else {
                         store.openLinkedApp(for: task)
