@@ -107,16 +107,15 @@ final class TaskStore: ObservableObject {
 
     var currentFocusTaskID: UUID? {
         let currentTasks = currentLoopTasks
+
+        if let focusedTaskID,
+           currentTasks.contains(where: { $0.id == focusedTaskID && !$0.doneThisLoop }) {
+            return focusedTaskID
+        }
+
         let firstReadyPriorityTaskID = currentTasks
             .first { !$0.doneThisLoop && $0.isPriority && !deferredPriorityTaskIDs.contains($0.id) }?
             .id
-
-        if let focusedTaskID,
-           let focusedTask = currentTasks.first(where: { $0.id == focusedTaskID && !$0.doneThisLoop }) {
-            if focusedTask.isPriority || firstReadyPriorityTaskID == nil {
-                return focusedTaskID
-            }
-        }
 
         return firstReadyPriorityTaskID ?? firstUndoneCurrentTaskID()
     }
