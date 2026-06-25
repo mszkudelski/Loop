@@ -76,9 +76,9 @@ final class TaskStore: ObservableObject {
     var onQuickAddShortcutChange: ((KeyboardShortcutSetting) -> Void)?
 
     private let defaultsKey = "Loop.store.v1"
-    private let fastLoopCompletionThreshold: TimeInterval = 5 * 60
+    private let fastLoopCompletionThreshold: TimeInterval = 2 * 60
     private let fastLoopSuggestionWindow: TimeInterval = 10 * 60
-    private let quickCompletionThreshold: TimeInterval = 90
+    private let quickCompletionThreshold: TimeInterval = 20
     private let quickCompletionSuggestionWindow: TimeInterval = 10 * 60
     private var openingTaskIDs = Set<UUID>()
     private var lastAutoOpenedFocusedTaskID: UUID?

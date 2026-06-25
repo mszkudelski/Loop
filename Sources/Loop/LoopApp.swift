@@ -64,7 +64,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         button.title = ""
         button.imagePosition = .imageOnly
         button.target = self
-        button.action = #selector(togglePopover)
+        button.action = #selector(handleStatusItemClick)
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         updateStatusItemTitle()
     }
 
@@ -167,6 +168,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         closePopover()
     }
 
+    @objc private func handleStatusItemClick(_ sender: Any?) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            showStatusItemMenu()
+        } else {
+            togglePopover(sender)
+        }
+    }
+
     @objc private func togglePopover(_ sender: Any?) {
         if popover.isShown {
             closePopover()
@@ -183,6 +192,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isChoosingApplication else { return }
         guard popover.isShown else { return }
         popover.performClose(nil)
+    }
+
+    private func showStatusItemMenu() {
+        closePopover()
+        guard let button = statusItem?.button else { return }
+
+        let menu = NSMenu()
+        let appNameItem = NSMenuItem(title: appDisplayName, action: nil, keyEquivalent: "")
+        appNameItem.isEnabled = false
+        menu.addItem(appNameItem)
+
+        menu.popUp(positioning: appNameItem, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    private var appDisplayName: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+            ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? "Loop"
     }
 
     private func chooseApplication() -> LinkedApp? {
