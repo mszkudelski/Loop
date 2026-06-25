@@ -206,7 +206,8 @@ private struct LoopTasksView: View {
                         message: "You are moving through a short loop quickly. Add another task?",
                         actionTitle: "Add task",
                         systemImage: "plus.circle",
-                        action: onAddTask
+                        action: onAddTask,
+                        onDismiss: store.dismissFastLoopSuggestion
                     )
                 }
 
@@ -252,6 +253,21 @@ private struct LoopSuggestionRow: View {
     let actionTitle: String
     let systemImage: String
     let action: () -> Void
+    let onDismiss: (() -> Void)?
+
+    init(
+        message: String,
+        actionTitle: String,
+        systemImage: String,
+        action: @escaping () -> Void,
+        onDismiss: (() -> Void)? = nil
+    ) {
+        self.message = message
+        self.actionTitle = actionTitle
+        self.systemImage = systemImage
+        self.action = action
+        self.onDismiss = onDismiss
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -271,6 +287,17 @@ private struct LoopSuggestionRow: View {
                     .labelStyle(.titleAndIcon)
             }
             .controlSize(.small)
+
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Dismiss")
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
@@ -490,6 +517,8 @@ private struct TaskRow: View {
                     systemImage: suggestion.systemImage
                 ) {
                     perform(suggestion)
+                } onDismiss: {
+                    store.dismissSuggestion(suggestion, for: task)
                 }
             }
         }

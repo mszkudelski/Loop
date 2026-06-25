@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import Foundation
 
-enum LoopTaskSuggestion: Equatable {
+enum LoopTaskSuggestion: String, Codable, Equatable {
     case editCadence
     case markPriority
     case snoozeAfterQuickDone
@@ -64,6 +64,10 @@ final class TaskStore: ObservableObject {
     }
 
     @Published private(set) var autoOpenFocusedTaskApp = true {
+        didSet { save() }
+    }
+
+    @Published private(set) var dismissedFastLoopSuggestionAt: Date? {
         didSet { save() }
     }
 
@@ -248,6 +252,10 @@ final class TaskStore: ObservableObject {
             return false
         }
 
+        if let dismissedFastLoopSuggestionAt, dismissedFastLoopSuggestionAt >= latestCompletion {
+            return false
+        }
+
         let now = Date()
         return now.timeIntervalSince(latestCompletion) <= fastLoopSuggestionWindow
             && latestCompletion.timeIntervalSince(previousCompletion) <= fastLoopCompletionThreshold
@@ -257,18 +265,29 @@ final class TaskStore: ObservableObject {
         guard !task.isBacklog, !task.finished else { return nil }
 
         if shouldSuggestSnoozeAfterQuickCompletion(for: task) {
-            return .snoozeAfterQuickDone
+            return dismissedSuggestion(.snoozeAfterQuickDone, for: task) ? nil : .snoozeAfterQuickDone
         }
 
         if shouldSuggestMarkingPriority(for: task) {
-            return .markPriority
+            return dismissedSuggestion(.markPriority, for: task) ? nil : .markPriority
         }
 
         if shouldSuggestEditingCadence(for: task) {
-            return .editCadence
+            return dismissedSuggestion(.editCadence, for: task) ? nil : .editCadence
         }
 
         return nil
+    }
+
+    func dismissSuggestion(_ suggestion: LoopTaskSuggestion, for task: LoopTask) {
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        guard !tasks[index].dismissedSuggestions.contains(suggestion) else { return }
+        tasks[index].dismissedSuggestions.append(suggestion)
+        tasks[index].updatedAt = Date()
+    }
+
+    func dismissFastLoopSuggestion() {
+        dismissedFastLoopSuggestionAt = Date()
     }
 
     func addTask(
@@ -810,6 +829,10 @@ final class TaskStore: ObservableObject {
         return task.cadence != .everyFourLoops
     }
 
+    private func dismissedSuggestion(_ suggestion: LoopTaskSuggestion, for task: LoopTask) -> Bool {
+        task.dismissedSuggestions.contains(suggestion)
+    }
+
     private func recordFocusStarted(for taskID: UUID) {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
         tasks[index].focusedAt = Date()
@@ -1001,6 +1024,7 @@ final class TaskStore: ObservableObject {
             loopCompletions: loopCompletions,
             focusedTaskID: focusedTaskID,
             autoOpenFocusedTaskApp: autoOpenFocusedTaskApp,
+            dismissedFastLoopSuggestionAt: dismissedFastLoopSuggestionAt,
             shortcut: shortcut.normalized,
             doneShortcut: doneShortcut.normalized,
             quickAddShortcut: quickAddShortcut.normalized
@@ -1028,6 +1052,7 @@ final class TaskStore: ObservableObject {
         loopCompletions = snapshot.loopCompletions
         focusedTaskID = snapshot.focusedTaskID
         autoOpenFocusedTaskApp = snapshot.autoOpenFocusedTaskApp
+        dismissedFastLoopSuggestionAt = snapshot.dismissedFastLoopSuggestionAt
         doneShortcut = snapshot.doneShortcut.normalized
         quickAddShortcut = snapshot.quickAddShortcut.normalized
         tasks = snapshot.tasks.map { task in
@@ -1052,6 +1077,7 @@ private struct StoreSnapshot: Codable {
     var loopCompletions: [LoopCompletion]
     var focusedTaskID: UUID?
     var autoOpenFocusedTaskApp: Bool
+    var dismissedFastLoopSuggestionAt: Date?
     var shortcut: KeyboardShortcutSetting
     var doneShortcut: KeyboardShortcutSetting
     var quickAddShortcut: KeyboardShortcutSetting
@@ -1062,6 +1088,7 @@ private struct StoreSnapshot: Codable {
         case loopCompletions
         case focusedTaskID
         case autoOpenFocusedTaskApp
+        case dismissedFastLoopSuggestionAt
         case shortcut
         case doneShortcut
         case quickAddShortcut
@@ -1073,6 +1100,7 @@ private struct StoreSnapshot: Codable {
         loopCompletions: [LoopCompletion],
         focusedTaskID: UUID?,
         autoOpenFocusedTaskApp: Bool,
+        dismissedFastLoopSuggestionAt: Date?,
         shortcut: KeyboardShortcutSetting,
         doneShortcut: KeyboardShortcutSetting,
         quickAddShortcut: KeyboardShortcutSetting
@@ -1082,6 +1110,7 @@ private struct StoreSnapshot: Codable {
         self.loopCompletions = loopCompletions
         self.focusedTaskID = focusedTaskID
         self.autoOpenFocusedTaskApp = autoOpenFocusedTaskApp
+        self.dismissedFastLoopSuggestionAt = dismissedFastLoopSuggestionAt
         self.shortcut = shortcut
         self.doneShortcut = doneShortcut
         self.quickAddShortcut = quickAddShortcut
@@ -1094,6 +1123,7 @@ private struct StoreSnapshot: Codable {
         loopCompletions = try container.decodeIfPresent([LoopCompletion].self, forKey: .loopCompletions) ?? []
         focusedTaskID = try container.decodeIfPresent(UUID.self, forKey: .focusedTaskID)
         autoOpenFocusedTaskApp = try container.decodeIfPresent(Bool.self, forKey: .autoOpenFocusedTaskApp) ?? true
+        dismissedFastLoopSuggestionAt = try container.decodeIfPresent(Date.self, forKey: .dismissedFastLoopSuggestionAt)
         shortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .shortcut) ?? .defaultShortcut
         doneShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .doneShortcut) ?? .defaultDoneShortcut
         quickAddShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .quickAddShortcut) ?? .defaultQuickAddShortcut
