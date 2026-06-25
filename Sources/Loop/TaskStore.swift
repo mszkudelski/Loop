@@ -105,12 +105,17 @@ final class TaskStore: ObservableObject {
     }
 
     var currentFocusTaskID: UUID? {
+        let currentTasks = currentLoopTasks
+        let firstPriorityTaskID = currentTasks.first { !$0.doneThisLoop && $0.isPriority }?.id
+
         if let focusedTaskID,
-           currentLoopTasks.contains(where: { $0.id == focusedTaskID && !$0.doneThisLoop }) {
-            return focusedTaskID
+           let focusedTask = currentTasks.first(where: { $0.id == focusedTaskID && !$0.doneThisLoop }) {
+            if focusedTask.isPriority || firstPriorityTaskID == nil {
+                return focusedTaskID
+            }
         }
 
-        return firstUndoneCurrentTaskID()
+        return firstPriorityTaskID ?? firstUndoneCurrentTaskID()
     }
 
     var focusedTaskTitle: String? {
@@ -880,20 +885,12 @@ final class TaskStore: ObservableObject {
 
     private func orderedForIteration(_ tasks: [LoopTask]) -> [LoopTask] {
         let orderedTasks = ordered(tasks)
-        var regularTasks = orderedTasks.filter { !$0.isPriority }
-        var priorityTasks = orderedTasks.filter(\.isPriority)
-        guard !regularTasks.isEmpty, !priorityTasks.isEmpty else { return orderedTasks }
-
-        var result: [LoopTask] = []
-        while !regularTasks.isEmpty || !priorityTasks.isEmpty {
-            if !regularTasks.isEmpty {
-                result.append(regularTasks.removeFirst())
+        return orderedTasks.sorted {
+            if $0.isPriority != $1.isPriority {
+                return $0.isPriority
             }
-            if !priorityTasks.isEmpty {
-                result.append(priorityTasks.removeFirst())
-            }
+            return isOrderedBefore($0, $1)
         }
-        return result
     }
 
     private func isOrderedBefore(_ left: LoopTask, _ right: LoopTask) -> Bool {
