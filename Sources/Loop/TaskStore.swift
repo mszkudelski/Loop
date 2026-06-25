@@ -869,7 +869,7 @@ final class TaskStore: ObservableObject {
         }
     }
 
-    private func startIterationTimerIfNeeded(for taskID: UUID) {
+    private func startIterationTimerIfNeeded(for taskID: UUID, resetExisting: Bool = false) {
         guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
         guard normalizedIterationTimerMinutes(tasks[index].iterationTimerMinutes) != nil else {
             if tasks[index].iterationTimerStartedAt != nil || tasks[index].iterationTimerStartedLoop != nil {
@@ -879,7 +879,7 @@ final class TaskStore: ObservableObject {
             return
         }
         guard !tasks[index].doneThisLoop, !tasks[index].finished, !tasks[index].isBacklog else { return }
-        guard tasks[index].iterationTimerStartedLoop != loopNumber || tasks[index].iterationTimerStartedAt == nil else { return }
+        guard resetExisting || tasks[index].iterationTimerStartedLoop != loopNumber || tasks[index].iterationTimerStartedAt == nil else { return }
         tasks[index].iterationTimerStartedAt = Date()
         tasks[index].iterationTimerStartedLoop = loopNumber
     }
@@ -984,14 +984,15 @@ final class TaskStore: ObservableObject {
 
     private func setFocusedTaskID(_ nextFocusedTaskID: UUID?, openLinkedAppIfChanged: Bool) {
         let previousFocusedTaskID = focusedTaskID
+        let didFocusChange = previousFocusedTaskID != nextFocusedTaskID
         if focusedTaskID != nextFocusedTaskID {
             focusedTaskID = nextFocusedTaskID
         }
-        if previousFocusedTaskID != nextFocusedTaskID, let nextFocusedTaskID {
+        if didFocusChange, let nextFocusedTaskID {
             recordFocusStarted(for: nextFocusedTaskID)
         }
         if let nextFocusedTaskID {
-            startIterationTimerIfNeeded(for: nextFocusedTaskID)
+            startIterationTimerIfNeeded(for: nextFocusedTaskID, resetExisting: didFocusChange)
         }
         guard
             openLinkedAppIfChanged,
