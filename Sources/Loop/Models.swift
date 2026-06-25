@@ -20,6 +20,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
     var focusedAt: Date?
     var lastQuickCompletionAt: Date?
     var dismissedSuggestions: [LoopTaskSuggestion]
+    var priorityDeferredLoop: Int?
     var iterationTimerMinutes: Int?
     var iterationTimerStartedAt: Date?
     var iterationTimerStartedLoop: Int?
@@ -46,6 +47,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         focusedAt: Date? = nil,
         lastQuickCompletionAt: Date? = nil,
         dismissedSuggestions: [LoopTaskSuggestion] = [],
+        priorityDeferredLoop: Int? = nil,
         iterationTimerMinutes: Int? = nil,
         iterationTimerStartedAt: Date? = nil,
         iterationTimerStartedLoop: Int? = nil,
@@ -71,6 +73,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         self.focusedAt = focusedAt
         self.lastQuickCompletionAt = lastQuickCompletionAt
         self.dismissedSuggestions = dismissedSuggestions
+        self.priorityDeferredLoop = priorityDeferredLoop
         self.iterationTimerMinutes = iterationTimerMinutes
         self.iterationTimerStartedAt = iterationTimerStartedAt
         self.iterationTimerStartedLoop = iterationTimerStartedLoop
@@ -99,6 +102,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         case focusedAt
         case lastQuickCompletionAt
         case dismissedSuggestions
+        case priorityDeferredLoop
         case iterationTimerMinutes
         case iterationTimerStartedAt
         case iterationTimerStartedLoop
@@ -128,6 +132,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         focusedAt = try container.decodeIfPresent(Date.self, forKey: .focusedAt)
         lastQuickCompletionAt = try container.decodeIfPresent(Date.self, forKey: .lastQuickCompletionAt)
         dismissedSuggestions = try container.decodeIfPresent([LoopTaskSuggestion].self, forKey: .dismissedSuggestions) ?? []
+        priorityDeferredLoop = try container.decodeIfPresent(Int.self, forKey: .priorityDeferredLoop)
         iterationTimerMinutes = try container.decodeIfPresent(Int.self, forKey: .iterationTimerMinutes)
         iterationTimerStartedAt = try container.decodeIfPresent(Date.self, forKey: .iterationTimerStartedAt)
         iterationTimerStartedLoop = try container.decodeIfPresent(Int.self, forKey: .iterationTimerStartedLoop)
@@ -155,6 +160,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(focusedAt, forKey: .focusedAt)
         try container.encodeIfPresent(lastQuickCompletionAt, forKey: .lastQuickCompletionAt)
         try container.encode(dismissedSuggestions, forKey: .dismissedSuggestions)
+        try container.encodeIfPresent(priorityDeferredLoop, forKey: .priorityDeferredLoop)
         try container.encodeIfPresent(iterationTimerMinutes, forKey: .iterationTimerMinutes)
         try container.encodeIfPresent(iterationTimerStartedAt, forKey: .iterationTimerStartedAt)
         try container.encodeIfPresent(iterationTimerStartedLoop, forKey: .iterationTimerStartedLoop)

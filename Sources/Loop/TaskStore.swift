@@ -85,7 +85,6 @@ final class TaskStore: ObservableObject {
     private let quickCompletionThreshold: TimeInterval = 20
     private let quickCompletionSuggestionWindow: TimeInterval = 10 * 60
     private var openingTaskIDs = Set<UUID>()
-    private var deferredPriorityTaskIDs = Set<UUID>()
     private var lastAutoOpenedFocusedTaskID: UUID?
     private var snoozeRefreshTimer: Timer?
     private var countdownRefreshTimer: Timer?
@@ -114,7 +113,7 @@ final class TaskStore: ObservableObject {
         }
 
         let firstReadyPriorityTaskID = currentTasks
-            .first { !$0.doneThisLoop && $0.isPriority && !deferredPriorityTaskIDs.contains($0.id) }?
+            .first { !$0.doneThisLoop && $0.isPriority && !isPriorityDeferred($0) }?
             .id
 
         return firstReadyPriorityTaskID ?? firstUndoneCurrentTaskID()
@@ -359,6 +358,9 @@ final class TaskStore: ObservableObject {
             updatedTask.doneThisLoop = false
             updatedTask.lastCompletedLoop = nil
             updatedTask.lastQuickCompletionAt = nil
+            if !previousTask.isPriority {
+                updatedTask.priorityDeferredLoop = nil
+            }
         }
 
         updatedTask.iterationTimerMinutes = normalizedIterationTimerMinutes(updatedTask.iterationTimerMinutes)
@@ -375,7 +377,7 @@ final class TaskStore: ObservableObject {
                 recordQuickCompletionIfNeeded(for: &updatedTask)
             }
             if !updatedTask.isPriority {
-                deferredPriorityTaskIDs.removeAll()
+                clearPriorityDeferrals()
             }
         } else if updatedTask.lastCompletedLoop == loopNumber {
             updatedTask.lastCompletedLoop = nil
@@ -410,7 +412,7 @@ final class TaskStore: ObservableObject {
             tasks[index].iterationTimerStartedAt = nil
             tasks[index].iterationTimerStartedLoop = nil
             recordQuickCompletionIfNeeded(for: &tasks[index])
-            deferredPriorityTaskIDs.removeAll()
+            clearPriorityDeferrals()
         } else if tasks[index].lastCompletedLoop == loopNumber {
             tasks[index].lastCompletedLoop = nil
             tasks[index].lastQuickCompletionAt = nil
@@ -521,7 +523,7 @@ final class TaskStore: ObservableObject {
         tasks[index].manualFocusCount = 0
         tasks[index].updatedAt = Date()
         if !tasks[index].isPriority {
-            deferredPriorityTaskIDs.remove(task.id)
+            tasks[index].priorityDeferredLoop = nil
         } else {
             focusedTaskID = nil
         }
@@ -594,7 +596,7 @@ final class TaskStore: ObservableObject {
     private func advanceLoop(openNextFocusedApp: Bool, resetFocusToFirstTask: Bool) {
         loopCompletions.append(LoopCompletion(loopNumber: loopNumber))
         loopNumber += 1
-        deferredPriorityTaskIDs.removeAll()
+        clearPriorityDeferrals()
         for index in tasks.indices where !tasks[index].isBacklog && !tasks[index].finished && tasks[index].doneThisLoop {
             tasks[index].doneThisLoop = false
             tasks[index].lastQuickCompletionAt = nil
@@ -907,8 +909,8 @@ final class TaskStore: ObservableObject {
 
     private func orderedForIteration(_ tasks: [LoopTask]) -> [LoopTask] {
         let orderedTasks = ordered(tasks)
-        let readyPriorityTasks = orderedTasks.filter { $0.isPriority && !deferredPriorityTaskIDs.contains($0.id) }
-        let deferredPriorityTasks = orderedTasks.filter { $0.isPriority && deferredPriorityTaskIDs.contains($0.id) }
+        let readyPriorityTasks = orderedTasks.filter { $0.isPriority && !isPriorityDeferred($0) }
+        let deferredPriorityTasks = orderedTasks.filter { $0.isPriority && isPriorityDeferred($0) }
         let regularTasks = orderedTasks.filter { !$0.isPriority }
 
         if !readyPriorityTasks.isEmpty {
@@ -951,7 +953,7 @@ final class TaskStore: ObservableObject {
         tasks[index].iterationTimerStartedAt = nil
         tasks[index].iterationTimerStartedLoop = nil
         recordQuickCompletionIfNeeded(for: &tasks[index])
-        deferredPriorityTaskIDs.removeAll()
+        clearPriorityDeferrals()
         tasks[index].updatedAt = Date()
         if !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: openNextFocusedApp) {
             ensureFocusedTask(openLinkedAppIfChanged: openNextFocusedApp)
@@ -968,11 +970,22 @@ final class TaskStore: ObservableObject {
         tasks[index].iterationTimerStartedAt = nil
         tasks[index].iterationTimerStartedLoop = nil
         tasks[index].updatedAt = Date()
-        deferredPriorityTaskIDs.insert(tasks[index].id)
+        tasks[index].priorityDeferredLoop = loopNumber
         if focusedTaskID == tasks[index].id {
             focusedTaskID = nil
         }
         ensureFocusedTask(openLinkedAppIfChanged: openNextFocusedApp)
+    }
+
+    private func isPriorityDeferred(_ task: LoopTask) -> Bool {
+        task.priorityDeferredLoop == loopNumber
+    }
+
+    private func clearPriorityDeferrals() {
+        for index in tasks.indices where tasks[index].priorityDeferredLoop != nil {
+            tasks[index].priorityDeferredLoop = nil
+            tasks[index].updatedAt = Date()
+        }
     }
 
     private func ensureFocusedTask(openLinkedAppIfChanged: Bool = false) {
@@ -1117,6 +1130,11 @@ final class TaskStore: ObservableObject {
                 migratedTask.doneThisLoop = false
                 migratedTask.lastCompletedLoop = nil
                 migratedTask.lastQuickCompletionAt = nil
+                if migratedTask.priorityDeferredLoop != loopNumber {
+                    migratedTask.priorityDeferredLoop = nil
+                }
+            } else {
+                migratedTask.priorityDeferredLoop = nil
             }
             return migratedTask
         }
