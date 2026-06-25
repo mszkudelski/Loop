@@ -183,6 +183,7 @@ private struct LoopTasksView: View {
     @State private var draggingTaskID: UUID?
     @State private var lastDropTargetID: UUID?
     @State private var showsDoneTasks = false
+    @State private var showsFutureTasks = false
     let onAddTask: () -> Void
 
     var body: some View {
@@ -196,9 +197,15 @@ private struct LoopTasksView: View {
 
                     Spacer()
 
-                    Toggle("Show done", isOn: $showsDoneTasks)
-                        .toggleStyle(.checkbox)
-                        .controlSize(.small)
+                    HStack(spacing: 12) {
+                        Toggle("Show future", isOn: $showsFutureTasks)
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+
+                        Toggle("Show done", isOn: $showsDoneTasks)
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                    }
                 }
 
                 if store.shouldSuggestAddingTaskToFastLoop {
@@ -233,6 +240,14 @@ private struct LoopTasksView: View {
 
                 if showsDoneTasks {
                     TaskSection(title: "Done This Iteration", tasks: store.doneTasks, emptyTitle: "No done tasks") { task in
+                        TaskRow(task: task) {
+                            editingTask = task
+                        }
+                    }
+                }
+
+                if showsFutureTasks {
+                    TaskSection(title: "Future", tasks: store.upcomingTasks, emptyTitle: "No future tasks") { task in
                         TaskRow(task: task) {
                             editingTask = task
                         }
