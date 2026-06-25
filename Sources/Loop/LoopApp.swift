@@ -17,6 +17,7 @@ struct LoopMenuBarApp: App {
 private enum HotKeyIdentifier {
     static let togglePopover = UInt32(1)
     static let markFocusedTaskDone = UInt32(2)
+    static let quickAddTask = UInt32(3)
 }
 
 @MainActor
@@ -30,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isChoosingApplication = false
     private var focusBannerWindow: NSPanel?
     private var focusBannerDismissWorkItem: DispatchWorkItem?
+    private var quickAddWindow: NSPanel?
+    private var quickAddDraft = ""
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -88,11 +91,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         registerPopoverHotKey(store.shortcut)
         registerDoneHotKey(store.doneShortcut)
+        registerQuickAddHotKey(store.quickAddShortcut)
         store.onShortcutChange = { [weak self] shortcut in
             self?.registerPopoverHotKey(shortcut)
         }
         store.onDoneShortcutChange = { [weak self] shortcut in
             self?.registerDoneHotKey(shortcut)
+        }
+        store.onQuickAddShortcutChange = { [weak self] shortcut in
+            self?.registerQuickAddHotKey(shortcut)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -112,6 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.store.markFocusedTaskDone(openNextFocusedApp: true) {
                 self.showFocusBanner()
             }
+        }
+    }
+
+    private func registerQuickAddHotKey(_ shortcut: KeyboardShortcutSetting) {
+        _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.quickAddTask) { [weak self] in
+            self?.showQuickAddWindow()
         }
     }
 
@@ -225,6 +238,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     }
 
+    private func showQuickAddWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let panelSize = NSSize(width: 380, height: 62)
+        let panel = quickAddWindow ?? QuickAddPanel(
+            contentRect: NSRect(origin: .zero, size: panelSize),
+            styleMask: [.titled, .closable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
+        panel.isReleasedWhenClosed = false
+        panel.isFloatingPanel = true
+        panel.level = .floating
+        panel.hidesOnDeactivate = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+        panel.setContentSize(panelSize)
+        panel.contentView = NSHostingView(rootView: QuickAddTaskView(
+            store: store,
+            initialTitle: quickAddDraft,
+            onDraftChange: { [weak self] draft in
+                self?.quickAddDraft = draft
+            },
+            onDismiss: { [weak self] in
+                self?.quickAddWindow?.close()
+            }
+        ))
+        panel.center()
+
+        quickAddWindow = panel
+        panel.makeKeyAndOrderFront(nil)
+        panel.orderFrontRegardless()
+        DispatchQueue.main.async {
+            guard let textField = panel.contentView?.firstSubview(ofType: KeyHandlingTextField.self) else { return }
+            panel.makeFirstResponder(textField)
+        }
+    }
+
     private func showFocusBanner() {
         let bannerState = FocusBannerState(task: store.focusedTask)
         let bannerView = FocusBannerView(state: bannerState) { [weak self] in
@@ -278,6 +330,200 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusBannerDismissWorkItem = nil
         focusBannerWindow?.close()
         focusBannerWindow = nil
+    }
+}
+
+private struct QuickAddTaskView: View {
+    @ObservedObject var store: TaskStore
+    let initialTitle: String
+    let onDraftChange: (String) -> Void
+    let onDismiss: () -> Void
+
+    @State private var title = ""
+
+    init(
+        store: TaskStore,
+        initialTitle: String,
+        onDraftChange: @escaping (String) -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.store = store
+        self.initialTitle = initialTitle
+        self.onDraftChange = onDraftChange
+        self.onDismiss = onDismiss
+        _title = State(initialValue: initialTitle)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+
+            ReturnAwareTextField(
+                placeholder: "Add task to backlog",
+                text: $title,
+                onReturn: { currentTitle in
+                    submit(currentTitle, addToIteration: false)
+                },
+                onCommandReturn: { currentTitle in
+                    submit(currentTitle, addToIteration: true)
+                },
+                onTextChange: { currentTitle in
+                    title = currentTitle
+                    onDraftChange(currentTitle)
+                },
+                onEscape: onDismiss
+            )
+            .frame(height: 34)
+        }
+        .padding(.horizontal, 14)
+        .frame(width: 380, height: 62)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func submit(_ currentTitle: String, addToIteration: Bool) {
+        let trimmedTitle = currentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTitle.isEmpty else { return }
+        store.addTask(title: trimmedTitle, addToIteration: addToIteration)
+        title = ""
+        onDraftChange("")
+        onDismiss()
+    }
+}
+
+private struct ReturnAwareTextField: NSViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    let onReturn: (String) -> Void
+    let onCommandReturn: (String) -> Void
+    let onTextChange: (String) -> Void
+    let onEscape: () -> Void
+
+    func makeNSView(context: Context) -> KeyHandlingTextField {
+        let textField = KeyHandlingTextField()
+        textField.placeholderString = placeholder
+        textField.bezelStyle = .roundedBezel
+        textField.isBordered = true
+        textField.drawsBackground = true
+        textField.font = .systemFont(ofSize: 18, weight: .regular)
+        textField.delegate = context.coordinator
+        textField.onEscape = onEscape
+        textField.onCommandReturn = onCommandReturn
+        context.coordinator.onReturn = onReturn
+        context.coordinator.onCommandReturn = onCommandReturn
+        context.coordinator.onTextChange = onTextChange
+
+        return textField
+    }
+
+    func updateNSView(_ nsView: KeyHandlingTextField, context: Context) {
+        nsView.stringValue = text
+        nsView.placeholderString = placeholder
+        nsView.onEscape = onEscape
+        nsView.onCommandReturn = onCommandReturn
+        context.coordinator.onReturn = onReturn
+        context.coordinator.onCommandReturn = onCommandReturn
+        context.coordinator.onTextChange = onTextChange
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var text: String
+        var onReturn: ((String) -> Void)?
+        var onCommandReturn: ((String) -> Void)?
+        var onTextChange: ((String) -> Void)?
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? NSTextField else { return }
+            text = textField.stringValue
+            onTextChange?(textField.stringValue)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            let submitCommands: Set<Selector> = [
+                #selector(NSResponder.insertNewline(_:)),
+                #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+                #selector(NSResponder.insertLineBreak(_:))
+            ]
+            guard submitCommands.contains(commandSelector) else {
+                return false
+            }
+
+            let currentText = textView.string
+            text = currentText
+            let modifierFlags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+            if modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
+                onCommandReturn?(currentText)
+            } else {
+                onReturn?(currentText)
+            }
+            return true
+        }
+    }
+}
+
+private final class KeyHandlingTextField: NSTextField {
+    var onEscape: (() -> Void)?
+    var onCommandReturn: ((String) -> Void)?
+    private var didRequestInitialFocus = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard !didRequestInitialFocus else { return }
+        didRequestInitialFocus = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self)
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            onEscape?()
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.command), event.keyCode == 36 || event.keyCode == 76 else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        onCommandReturn?(currentEditor()?.string ?? stringValue)
+        return true
+    }
+}
+
+private final class QuickAddPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
+private extension NSView {
+    func firstSubview<T: NSView>(ofType type: T.Type) -> T? {
+        if let typedSelf = self as? T {
+            return typedSelf
+        }
+
+        for subview in subviews {
+            if let match = subview.firstSubview(ofType: type) {
+                return match
+            }
+        }
+
+        return nil
     }
 }
 
