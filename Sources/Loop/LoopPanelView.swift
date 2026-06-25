@@ -7,16 +7,18 @@ struct LoopPanelView: View {
     let onQuit: () -> Void
     let onChooseApplication: () -> LinkedApp?
 
-    @State private var selectedView: PanelView = .loop
     @State private var newTaskTitle = ""
     @State private var newTaskCadence: LoopCadence = .everyLoop
     @State private var editingTask: LoopTask?
     @State private var isAddingDetailedTask = false
+    @State private var isShowingSettings = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            content
+            LoopTasksView(editingTask: $editingTask) {
+                isAddingDetailedTask = true
+            }
             footer
         }
         .frame(width: 440)
@@ -38,6 +40,10 @@ struct LoopPanelView: View {
                 )
             }
         }
+        .sheet(isPresented: $isShowingSettings) {
+            SettingsPanelView()
+                .environmentObject(store)
+        }
     }
 
     private var header: some View {
@@ -53,48 +59,33 @@ struct LoopPanelView: View {
 
                 Spacer()
 
-                Button {
-                    store.advanceLoop()
-                } label: {
-                    Image(systemName: "arrow.right.circle.fill")
-                        .font(.title3)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                .help("Next iteration")
-            }
-
-            HStack(alignment: .center, spacing: 10) {
-                Picker("", selection: $selectedView) {
-                    ForEach(PanelView.allCases) { view in
-                        Text(view.title).tag(view)
+                HStack(spacing: 12) {
+                    Button {
+                        store.advanceLoop()
+                    } label: {
+                        Image(systemName: "arrow.right.circle.fill")
+                            .font(.title3)
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .help("Next iteration")
+
+                    Button {
+                        isShowingSettings = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Settings")
                 }
-                .pickerStyle(.segmented)
             }
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 12)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.72))
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch selectedView {
-        case .loop:
-            LoopTasksView(editingTask: $editingTask) {
-                isAddingDetailedTask = true
-            }
-        case .tasks:
-            AllTasksView(editingTask: $editingTask)
-        case .backlog:
-            BacklogTasksView(editingTask: $editingTask)
-        case .stats:
-            StatisticsView()
-        case .shortcut:
-            ShortcutSettingsView()
-        }
     }
 
     private var footer: some View {
@@ -171,36 +162,30 @@ struct LoopPanelView: View {
     }
 }
 
-private enum PanelView: String, CaseIterable, Identifiable {
-    case loop
-    case tasks
-    case backlog
-    case stats
-    case shortcut
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .loop: "Now"
-        case .tasks: "Tasks"
-        case .backlog: "Backlog"
-        case .stats: "Stats"
-        case .shortcut: "Shortcut"
-        }
-    }
-}
-
 private struct LoopTasksView: View {
     @EnvironmentObject private var store: TaskStore
     @Binding var editingTask: LoopTask?
     @State private var draggingTaskID: UUID?
     @State private var lastDropTargetID: UUID?
+    @State private var showsDoneTasks = false
     let onAddTask: () -> Void
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Now")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    Spacer()
+
+                    Toggle("Show done", isOn: $showsDoneTasks)
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                }
+
                 if store.shouldSuggestAddingTaskToFastLoop {
                     LoopSuggestionRow(
                         message: "You are moving through a short loop quickly. Add another task?",
@@ -210,7 +195,7 @@ private struct LoopTasksView: View {
                     )
                 }
 
-                TaskSection(title: "Current Iteration", tasks: store.currentLoopTasks, emptyTitle: "No tasks") { task in
+                TaskSection(title: "Open", tasks: openTasks, emptyTitle: "No open tasks") { task in
                     TaskRow(task: task) {
                         editingTask = task
                     }
@@ -229,9 +214,21 @@ private struct LoopTasksView: View {
                         )
                     )
                 }
+
+                if showsDoneTasks {
+                    TaskSection(title: "Done This Iteration", tasks: store.doneTasks, emptyTitle: "No done tasks") { task in
+                        TaskRow(task: task) {
+                            editingTask = task
+                        }
+                    }
+                }
             }
             .padding(16)
         }
+    }
+
+    private var openTasks: [LoopTask] {
+        store.currentLoopTasks.filter { !$0.doneThisLoop }
     }
 }
 
@@ -264,66 +261,6 @@ private struct LoopSuggestionRow: View {
         .padding(.vertical, 7)
         .background(Color.accentColor.opacity(0.08))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    }
-}
-
-private struct AllTasksView: View {
-    @EnvironmentObject private var store: TaskStore
-    @Binding var editingTask: LoopTask?
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                TaskSection(title: "Open", tasks: store.activeTasks, emptyTitle: "No open tasks") { task in
-                    TaskRow(task: task) {
-                        editingTask = task
-                    }
-                }
-
-                TaskSection(title: "Later", tasks: store.upcomingTasks, emptyTitle: "No waiting tasks") { task in
-                    TaskRow(task: task) {
-                        editingTask = task
-                    }
-                }
-
-                TaskSection(title: "Done This Iteration", tasks: store.doneTasks, emptyTitle: "No done tasks") { task in
-                    TaskRow(task: task) {
-                        editingTask = task
-                    }
-                }
-
-                TaskSection(title: "Finished", tasks: store.finishedTasks, emptyTitle: "No finished tasks") { task in
-                    FinishedTaskRow(task: task)
-                }
-
-                Button {
-                    store.resetCurrentLoop()
-                } label: {
-                    Label("Reset Iteration", systemImage: "arrow.counterclockwise")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-            .padding(16)
-        }
-    }
-}
-
-private struct BacklogTasksView: View {
-    @EnvironmentObject private var store: TaskStore
-    @Binding var editingTask: LoopTask?
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                TaskSection(title: "Backlog", tasks: store.backlogTasks, emptyTitle: "No backlog tasks") { task in
-                    TaskRow(task: task) {
-                        editingTask = task
-                    }
-                }
-            }
-            .padding(16)
-        }
     }
 }
 
@@ -621,60 +558,50 @@ private struct LoopTaskDropDelegate: DropDelegate {
     }
 }
 
-private struct FinishedTaskRow: View {
-    @EnvironmentObject private var store: TaskStore
-
-    let task: LoopTask
+private struct SettingsPanelView: View {
+    @State private var selectedSection: SettingsSection = .stats
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "checkmark.seal.fill")
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 6) {
-                Text(task.title)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text("Settings")
+                    .font(.title3.weight(.semibold))
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                if task.isPriority {
-                    Image(systemName: "star.fill")
-                        .font(.caption)
-                        .foregroundStyle(.yellow)
-                        .help("Priority")
+                Picker("", selection: $selectedSection) {
+                    ForEach(SettingsSection.allCases) { section in
+                        Text(section.title).tag(section)
+                    }
                 }
-
-                CadenceBadge(cadence: task.cadence)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                if let appName = task.linkedApp?.name {
-                    Text(appName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .frame(maxWidth: 92, alignment: .leading)
-                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
             }
+            .padding(16)
 
-            Spacer()
+            Divider()
+
+            switch selectedSection {
+            case .stats:
+                StatisticsView()
+            case .shortcuts:
+                ShortcutSettingsView()
+            }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .contextMenu {
-            Button {
-                store.restore(task)
-            } label: {
-                Label("Restore", systemImage: "arrow.uturn.left")
-            }
+        .frame(width: 500, height: 560)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+}
 
-            Button {
-                store.delete(task)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case stats
+    case shortcuts
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .stats: "Stats"
+        case .shortcuts: "Shortcuts"
         }
     }
 }
@@ -856,6 +783,8 @@ private struct StatTile: View {
 }
 
 private struct CompletedTaskStatRow: View {
+    @EnvironmentObject private var store: TaskStore
+
     let stat: TaskCompletionStat
 
     var body: some View {
@@ -882,6 +811,21 @@ private struct CompletedTaskStatRow: View {
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contextMenu {
+            if let task = store.tasks.first(where: { $0.id == stat.id }) {
+                Button {
+                    store.restore(task)
+                } label: {
+                    Label("Restore", systemImage: "arrow.uturn.left")
+                }
+
+                Button {
+                    store.delete(task)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+        }
     }
 }
 
