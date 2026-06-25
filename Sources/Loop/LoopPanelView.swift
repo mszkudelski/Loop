@@ -1149,7 +1149,7 @@ private struct TaskEditorView: View {
                 .toggleStyle(.checkbox)
 
             if !isNew {
-                if !draft.isBacklog {
+                if !draft.isBacklog && !draft.isPriority {
                     Toggle("Done this iteration", isOn: $draft.doneThisLoop)
                         .toggleStyle(.checkbox)
                 }
