@@ -11,6 +11,7 @@ struct LoopPanelView: View {
     @State private var newTaskCadence: LoopCadence = .everyLoop
     @State private var editingTask: LoopTask?
     @State private var isAddingDetailedTask = false
+    @State private var isShowingBacklog = false
     @State private var isShowingSettings = false
 
     var body: some View {
@@ -39,6 +40,10 @@ struct LoopPanelView: View {
                     addToIteration: !newTask.isBacklog
                 )
             }
+        }
+        .sheet(isPresented: $isShowingBacklog) {
+            BacklogPanelView(onChooseApplication: onChooseApplication)
+                .environmentObject(store)
         }
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanelView()
@@ -69,6 +74,16 @@ struct LoopPanelView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
                     .help("Next iteration")
+
+                    Button {
+                        isShowingBacklog = true
+                    } label: {
+                        Image(systemName: "tray.full")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Backlog")
 
                     Button {
                         isShowingSettings = true
@@ -558,7 +573,158 @@ private struct LoopTaskDropDelegate: DropDelegate {
     }
 }
 
+private struct BacklogPanelView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: TaskStore
+
+    let onChooseApplication: () -> LinkedApp?
+
+    @State private var editingTask: LoopTask?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backlog")
+                        .font(.title3.weight(.semibold))
+                    Text("\(store.backlogTasks.count) \(store.backlogTasks.count == 1 ? "task" : "tasks")")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Close")
+            }
+            .padding(16)
+
+            Divider()
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    TaskSection(title: "Backlog", tasks: store.backlogTasks, emptyTitle: "No backlog tasks") { task in
+                        BacklogTaskRow(task: task) {
+                            editingTask = task
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+        .frame(width: 500, height: 560)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(item: $editingTask) { task in
+            TaskEditorView(task: task, onChooseApplication: onChooseApplication) { updatedTask in
+                store.updateTask(updatedTask)
+            }
+        }
+    }
+}
+
+private struct BacklogTaskRow: View {
+    @EnvironmentObject private var store: TaskStore
+
+    let task: LoopTask
+    let onEdit: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "tray")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(task.title)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if task.isPriority {
+                        Image(systemName: "star.fill")
+                            .font(.caption)
+                            .foregroundStyle(.yellow)
+                            .help("Priority")
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    CadenceBadge(cadence: task.cadence)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let iterationTimerMinutes = task.iterationTimerMinutes {
+                        TimerBadge(minutes: iterationTimerMinutes, remainingSeconds: nil)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if let appName = task.linkedApp?.name {
+                        Label(appName, systemImage: "app")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+            }
+
+            Button {
+                store.addToIteration(task)
+            } label: {
+                Image(systemName: "arrow.up.circle")
+            }
+            .help("Add to iteration")
+
+            Button {
+                onEdit()
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .help("Edit")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contextMenu {
+            Button {
+                store.addToIteration(task)
+            } label: {
+                Label("Add to Iteration", systemImage: "arrow.up.circle")
+            }
+
+            Button {
+                onEdit()
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+
+            Button {
+                store.finish(task)
+            } label: {
+                Label("Finish", systemImage: "checkmark.seal")
+            }
+
+            Button {
+                store.delete(task)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+        }
+    }
+}
+
 private struct SettingsPanelView: View {
+    @Environment(\.dismiss) private var dismiss
     @State private var selectedSection: SettingsSection = .stats
 
     var body: some View {
@@ -575,6 +741,16 @@ private struct SettingsPanelView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(width: 220)
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Close")
             }
             .padding(16)
 
