@@ -219,10 +219,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItemTitle() {
         guard let button = statusItem?.button else { return }
-        let title = truncatedMenuBarTitle(store.focusedTaskTitle)
+        let title = menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
         button.title = title
         button.imagePosition = title.isEmpty ? .imageOnly : .imageLeft
-        button.toolTip = store.focusedTaskTitle ?? "Open"
+        button.toolTip = menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
     }
 
     private func truncatedMenuBarTitle(_ title: String?) -> String {
@@ -230,6 +230,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !trimmedTitle.isEmpty else { return "" }
         guard trimmedTitle.count > 34 else { return trimmedTitle }
         return "\(trimmedTitle.prefix(31))..."
+    }
+
+    private func menuBarTitle(taskTitle: String?, timerText: String?) -> String {
+        let title = truncatedMenuBarTitle(taskTitle)
+        guard let timerText else { return title }
+        guard !title.isEmpty else { return timerText }
+        return "\(title) · \(timerText)"
+    }
+
+    private func menuBarTooltip(taskTitle: String?, timerText: String?) -> String {
+        let trimmedTitle = taskTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = trimmedTitle.isEmpty ? "Open" : trimmedTitle
+        guard let timerText else { return title }
+        return "\(title) · \(timerText) left"
     }
 
     private func showPopover() {
@@ -287,7 +301,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.dismissFocusBanner()
         }
 
-        let bannerSize = NSSize(width: 300, height: 58)
+        let bannerSize = NSSize(width: 390, height: 78)
         let panel = focusBannerWindow ?? NSPanel(
             contentRect: NSRect(origin: .zero, size: bannerSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -535,7 +549,7 @@ private struct FocusBannerState {
 
     init(task: LoopTask?) {
         if let task {
-            title = "Now"
+            title = "Focus"
             subtitle = [
                 task.title,
                 task.linkedApp?.name
@@ -561,35 +575,49 @@ private struct FocusBannerView: View {
     let onClick: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: state.systemImage)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.94))
-                .frame(width: 22)
+        HStack(spacing: 14) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(Color.accentColor)
+                .frame(width: 5, height: 50)
 
-            VStack(alignment: .leading, spacing: 1) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.12))
+                Image(systemName: state.systemImage)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 40, height: 40)
+
+            VStack(alignment: .leading, spacing: 4) {
                 Text(state.title)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.62))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.black.opacity(0.48))
+                    .textCase(.uppercase)
                 Text(state.subtitle)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .font(.callout.weight(.bold))
+                    .foregroundStyle(Color.black.opacity(0.9))
                     .lineLimit(1)
             }
 
             Spacer(minLength: 0)
+
+            if state.isClickable {
+                Image(systemName: "arrow.up.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.black.opacity(0.42))
+            }
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 9)
-        .frame(width: 300, height: 58)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(width: 390, height: 78)
+        .background(Color(red: 0.97, green: 0.98, blue: 0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(.white.opacity(0.12), lineWidth: 0.75)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.black.opacity(0.12), lineWidth: 1)
         }
-        .shadow(color: .black.opacity(0.22), radius: 16, y: 8)
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.22), radius: 18, y: 10)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onTapGesture {
             if state.isClickable {
                 onClick()

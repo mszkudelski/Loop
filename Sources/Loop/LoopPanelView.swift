@@ -16,14 +16,12 @@ struct LoopPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            Divider()
             content
-            Divider()
             footer
         }
-        .frame(width: 420)
-        .frame(minHeight: 540)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .frame(width: 440)
+        .frame(minHeight: 560)
+        .background(.regularMaterial)
         .sheet(item: $editingTask) { task in
             TaskEditorView(task: task, onChooseApplication: onChooseApplication) { updatedTask in
                 store.updateTask(updatedTask)
@@ -35,6 +33,7 @@ struct LoopPanelView: View {
                     title: newTask.title,
                     linkedApp: newTask.linkedApp,
                     cadence: newTask.cadence,
+                    iterationTimerMinutes: newTask.iterationTimerMinutes,
                     addToIteration: !newTask.isBacklog
                 )
             }
@@ -42,9 +41,28 @@ struct LoopPanelView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Iteration \(store.loopNumber)")
-                .font(.title3.weight(.semibold))
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Loop")
+                        .font(.title2.weight(.semibold))
+                    Text("Iteration \(store.loopNumber)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Button {
+                    store.advanceLoop()
+                } label: {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.title3)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .help("Next iteration")
+            }
 
             HStack(alignment: .center, spacing: 10) {
                 Picker("", selection: $selectedView) {
@@ -53,17 +71,12 @@ struct LoopPanelView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-
-                Button {
-                    store.advanceLoop()
-                } label: {
-                    Label("Next", systemImage: "arrow.right.circle")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.top, 14)
+        .padding(.bottom, 12)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.72))
     }
 
     @ViewBuilder
@@ -120,6 +133,7 @@ struct LoopPanelView: View {
                 Button(action: addQuickTask) {
                     Image(systemName: "plus")
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: [.command])
                 .help("Add task")
 
@@ -141,7 +155,9 @@ struct LoopPanelView: View {
                 .help("Quit")
             }
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.72))
     }
 
     private func addQuickTask() {
@@ -214,7 +230,7 @@ private struct LoopTasksView: View {
                     )
                 }
             }
-            .padding(12)
+            .padding(16)
         }
     }
 }
@@ -288,7 +304,7 @@ private struct AllTasksView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
             }
-            .padding(12)
+            .padding(16)
         }
     }
 }
@@ -306,7 +322,7 @@ private struct BacklogTasksView: View {
                     }
                 }
             }
-            .padding(12)
+            .padding(16)
         }
     }
 }
@@ -318,18 +334,34 @@ private struct TaskSection<Item: Identifiable, Content: View>: View {
     @ViewBuilder let row: (Item) -> Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                Spacer()
+
+                Text("\(tasks.count)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color(nsColor: .controlBackgroundColor))
+                    .clipShape(Capsule())
+            }
 
             if tasks.isEmpty {
                 Text(emptyTitle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 12)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             } else {
                 ForEach(tasks) { task in
                     row(task)
@@ -349,13 +381,15 @@ private struct TaskRow: View {
         let isFocused = store.currentFocusTaskID == task.id
         let isSnoozed = store.isSnoozed(task)
 
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button {
                     store.toggleDone(task)
                 } label: {
                     Image(systemName: task.isBacklog ? "tray" : (task.doneThisLoop ? "checkmark.circle.fill" : "circle"))
-                        .font(.body)
+                        .font(.title3)
+                        .foregroundStyle(task.doneThisLoop ? Color.accentColor : .secondary)
+                        .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
                 .disabled(task.isBacklog)
@@ -368,40 +402,52 @@ private struct TaskRow: View {
                         store.openLinkedApp(for: task)
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Text(task.title)
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(task.doneThisLoop ? .secondary : .primary)
-                            .strikethrough(task.doneThisLoop, color: .secondary)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            Text(task.title)
+                                .font(.body.weight(isFocused ? .semibold : .medium))
+                                .foregroundStyle(task.doneThisLoop ? .secondary : .primary)
+                                .strikethrough(task.doneThisLoop, color: .secondary)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                        if task.isPriority {
-                            Image(systemName: "star.fill")
-                                .font(.caption)
-                                .foregroundStyle(.yellow)
-                                .help("Priority")
+                            if task.isPriority {
+                                Image(systemName: "star.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.yellow)
+                                    .help("Priority")
+                            }
                         }
 
-                        CadenceBadge(cadence: task.cadence)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        if let appName = task.linkedApp?.name {
-                            Text(appName)
+                        HStack(spacing: 8) {
+                            CadenceBadge(cadence: task.cadence)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .frame(maxWidth: 92, alignment: .leading)
+
+                            if let iterationTimerMinutes = task.iterationTimerMinutes {
+                                TimerBadge(
+                                    minutes: iterationTimerMinutes,
+                                    remainingSeconds: isFocused ? store.iterationTimerRemainingSeconds(for: task) : nil
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            }
+
+                            if let appName = task.linkedApp?.name {
+                                Label(appName, systemImage: "app")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
                     }
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .background(isFocused ? Color.accentColor.opacity(0.14) : Color(nsColor: .controlBackgroundColor))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .background(isFocused ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.78))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 if isFocused {
@@ -520,6 +566,25 @@ private struct CadenceBadge: View {
                     .monospacedDigit()
             }
         }
+    }
+}
+
+private struct TimerBadge: View {
+    let minutes: Int
+    let remainingSeconds: Int?
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "timer")
+            Text(timerText)
+                .monospacedDigit()
+        }
+    }
+
+    private var timerText: String {
+        guard let remainingSeconds else { return "\(minutes)m" }
+        let remainingMinutes = max(0, Int(ceil(Double(remainingSeconds) / 60.0)))
+        return "\(remainingMinutes)m"
     }
 }
 
@@ -915,6 +980,22 @@ private struct TaskEditorView: View {
                 .pickerStyle(.segmented)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Iteration timer", isOn: iterationTimerEnabledBinding)
+                    .toggleStyle(.checkbox)
+
+                if draft.iterationTimerMinutes != nil {
+                    Stepper(value: iterationTimerMinutesBinding, in: 1...240, step: 1) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "timer")
+                                .foregroundStyle(.secondary)
+                            Text("\(draft.iterationTimerMinutes ?? 10) minutes")
+                                .monospacedDigit()
+                        }
+                    }
+                }
+            }
+
             Toggle("Backlog", isOn: $draft.isBacklog)
                 .toggleStyle(.checkbox)
 
@@ -949,6 +1030,36 @@ private struct TaskEditorView: View {
         if let linkedApp = onChooseApplication() {
             draft.linkedApp = linkedApp
         }
+    }
+
+    private var iterationTimerEnabledBinding: Binding<Bool> {
+        Binding(
+            get: {
+                draft.iterationTimerMinutes != nil
+            },
+            set: { isEnabled in
+                if isEnabled {
+                    draft.iterationTimerMinutes = draft.iterationTimerMinutes ?? 10
+                } else {
+                    draft.iterationTimerMinutes = nil
+                }
+                draft.iterationTimerStartedAt = nil
+                draft.iterationTimerStartedLoop = nil
+            }
+        )
+    }
+
+    private var iterationTimerMinutesBinding: Binding<Int> {
+        Binding(
+            get: {
+                draft.iterationTimerMinutes ?? 10
+            },
+            set: { minutes in
+                draft.iterationTimerMinutes = min(max(minutes, 1), 240)
+                draft.iterationTimerStartedAt = nil
+                draft.iterationTimerStartedLoop = nil
+            }
+        )
     }
 
     private var popularApplicationColumns: [GridItem] {

@@ -67,6 +67,8 @@ final class TaskStore: ObservableObject {
         didSet { save() }
     }
 
+    @Published private(set) var currentDate = Date()
+
     @Published var notice: String?
 
     var onShortcutChange: ((KeyboardShortcutSetting) -> Void)?
@@ -81,11 +83,13 @@ final class TaskStore: ObservableObject {
     private var openingTaskIDs = Set<UUID>()
     private var lastAutoOpenedFocusedTaskID: UUID?
     private var snoozeRefreshTimer: Timer?
+    private var countdownRefreshTimer: Timer?
     private var isLoading = false
 
     init() {
         load()
         startSnoozeRefreshTimer()
+        startCountdownRefreshTimer()
     }
 
     var activeTasks: [LoopTask] {
@@ -118,6 +122,18 @@ final class TaskStore: ObservableObject {
         }
 
         return task
+    }
+
+    var focusedTaskTimerText: String? {
+        guard
+            let focusedTask,
+            let remainingSeconds = iterationTimerRemainingSeconds(for: focusedTask)
+        else {
+            return nil
+        }
+
+        let minutes = max(0, Int(ceil(Double(remainingSeconds) / 60.0)))
+        return "\(minutes)m"
     }
 
     var doneTasks: [LoopTask] {
@@ -255,7 +271,13 @@ final class TaskStore: ObservableObject {
         return nil
     }
 
-    func addTask(title: String, linkedApp: LinkedApp? = nil, cadence: LoopCadence = .everyLoop, addToIteration: Bool = true) {
+    func addTask(
+        title: String,
+        linkedApp: LinkedApp? = nil,
+        cadence: LoopCadence = .everyLoop,
+        iterationTimerMinutes: Int? = nil,
+        addToIteration: Bool = true
+    ) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return }
         tasks.append(LoopTask(
@@ -264,7 +286,8 @@ final class TaskStore: ObservableObject {
             cadence: cadence,
             isBacklog: !addToIteration,
             sortOrder: nextSortOrder(),
-            createdLoop: addToIteration ? loopNumber : nil
+            createdLoop: addToIteration ? loopNumber : nil,
+            iterationTimerMinutes: normalizedIterationTimerMinutes(iterationTimerMinutes)
         ))
         ensureFocusedTask()
     }
@@ -286,6 +309,8 @@ final class TaskStore: ObservableObject {
             updatedTask.lastCompletedLoop = nil
             updatedTask.snoozedUntil = nil
             updatedTask.lastQuickCompletionAt = nil
+            updatedTask.iterationTimerStartedAt = nil
+            updatedTask.iterationTimerStartedLoop = nil
             updatedTask.finished = false
         }
 
@@ -297,13 +322,23 @@ final class TaskStore: ObservableObject {
             updatedTask.finishedAt = updatedTask.finishedAt ?? Date()
             updatedTask.snoozedUntil = nil
             updatedTask.lastQuickCompletionAt = nil
+            updatedTask.iterationTimerStartedAt = nil
+            updatedTask.iterationTimerStartedLoop = nil
         } else if previousTask.finished {
             updatedTask.finishedLoop = nil
             updatedTask.finishedAt = nil
         }
 
+        updatedTask.iterationTimerMinutes = normalizedIterationTimerMinutes(updatedTask.iterationTimerMinutes)
+        if updatedTask.iterationTimerMinutes == nil || previousTask.iterationTimerMinutes != updatedTask.iterationTimerMinutes {
+            updatedTask.iterationTimerStartedAt = nil
+            updatedTask.iterationTimerStartedLoop = nil
+        }
+
         if updatedTask.doneThisLoop {
             updatedTask.lastCompletedLoop = loopNumber
+            updatedTask.iterationTimerStartedAt = nil
+            updatedTask.iterationTimerStartedLoop = nil
             if !previousTask.doneThisLoop {
                 recordQuickCompletionIfNeeded(for: &updatedTask)
             }
@@ -333,6 +368,8 @@ final class TaskStore: ObservableObject {
         if tasks[index].doneThisLoop {
             tasks[index].lastCompletedLoop = loopNumber
             tasks[index].snoozedUntil = nil
+            tasks[index].iterationTimerStartedAt = nil
+            tasks[index].iterationTimerStartedLoop = nil
             recordQuickCompletionIfNeeded(for: &tasks[index])
         } else if tasks[index].lastCompletedLoop == loopNumber {
             tasks[index].lastCompletedLoop = nil
@@ -372,6 +409,8 @@ final class TaskStore: ObservableObject {
         tasks[index].finishedAt = Date()
         tasks[index].snoozedUntil = nil
         tasks[index].lastQuickCompletionAt = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         tasks[index].updatedAt = Date()
         if wasUndoneCurrentLoopTask && advanceLoopIfNoUndoneCurrentLoopTasks(openNextFocusedApp: true) {
             return
@@ -388,6 +427,8 @@ final class TaskStore: ObservableObject {
         tasks[index].finishedAt = nil
         tasks[index].snoozedUntil = nil
         tasks[index].lastQuickCompletionAt = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         tasks[index].updatedAt = Date()
         ensureFocusedTask()
     }
@@ -407,6 +448,8 @@ final class TaskStore: ObservableObject {
         tasks[index].lastCompletedLoop = nil
         tasks[index].snoozedUntil = nil
         tasks[index].lastQuickCompletionAt = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         tasks[index].createdLoop = tasks[index].createdLoop ?? loopNumber
         tasks[index].updatedAt = Date()
         ensureFocusedTask(openLinkedAppIfChanged: false)
@@ -420,6 +463,8 @@ final class TaskStore: ObservableObject {
         tasks[index].lastCompletedLoop = nil
         tasks[index].snoozedUntil = nil
         tasks[index].lastQuickCompletionAt = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         tasks[index].updatedAt = Date()
         if focusedTaskID == task.id {
             focusedTaskID = nil
@@ -454,6 +499,8 @@ final class TaskStore: ObservableObject {
         tasks[index].snoozedUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
         tasks[index].snoozeCount += 1
         tasks[index].lastQuickCompletionAt = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         tasks[index].updatedAt = Date()
         if focusedTaskID == task.id {
             focusedTaskID = nil
@@ -533,6 +580,8 @@ final class TaskStore: ObservableObject {
             }
             tasks[index].doneThisLoop = false
             tasks[index].lastQuickCompletionAt = nil
+            tasks[index].iterationTimerStartedAt = nil
+            tasks[index].iterationTimerStartedLoop = nil
             tasks[index].updatedAt = Date()
         }
         ensureFocusedTask()
@@ -549,6 +598,19 @@ final class TaskStore: ObservableObject {
     func isSnoozed(_ task: LoopTask, at date: Date = Date()) -> Bool {
         guard let snoozedUntil = task.snoozedUntil else { return false }
         return snoozedUntil > date
+    }
+
+    func iterationTimerRemainingSeconds(for task: LoopTask, at date: Date? = nil) -> Int? {
+        guard let timerMinutes = normalizedIterationTimerMinutes(task.iterationTimerMinutes) else { return nil }
+        guard
+            task.iterationTimerStartedLoop == loopNumber,
+            let startedAt = task.iterationTimerStartedAt
+        else {
+            return timerMinutes * 60
+        }
+
+        let deadline = startedAt.addingTimeInterval(TimeInterval(timerMinutes * 60))
+        return max(0, Int(ceil(deadline.timeIntervalSince(date ?? currentDate))))
     }
 
     func nextDueLoop(for task: LoopTask) -> Int? {
@@ -756,6 +818,21 @@ final class TaskStore: ObservableObject {
         }
     }
 
+    private func startIterationTimerIfNeeded(for taskID: UUID) {
+        guard let index = tasks.firstIndex(where: { $0.id == taskID }) else { return }
+        guard normalizedIterationTimerMinutes(tasks[index].iterationTimerMinutes) != nil else {
+            if tasks[index].iterationTimerStartedAt != nil || tasks[index].iterationTimerStartedLoop != nil {
+                tasks[index].iterationTimerStartedAt = nil
+                tasks[index].iterationTimerStartedLoop = nil
+            }
+            return
+        }
+        guard !tasks[index].doneThisLoop, !tasks[index].finished, !tasks[index].isBacklog else { return }
+        guard tasks[index].iterationTimerStartedLoop != loopNumber || tasks[index].iterationTimerStartedAt == nil else { return }
+        tasks[index].iterationTimerStartedAt = Date()
+        tasks[index].iterationTimerStartedLoop = loopNumber
+    }
+
     private func recordQuickCompletionIfNeeded(for task: inout LoopTask) {
         let now = Date()
         guard
@@ -818,6 +895,8 @@ final class TaskStore: ObservableObject {
         tasks[index].doneThisLoop = true
         tasks[index].lastCompletedLoop = loopNumber
         tasks[index].snoozedUntil = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         recordQuickCompletionIfNeeded(for: &tasks[index])
         tasks[index].updatedAt = Date()
         if !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: openNextFocusedApp) {
@@ -839,6 +918,9 @@ final class TaskStore: ObservableObject {
         }
         if previousFocusedTaskID != nextFocusedTaskID, let nextFocusedTaskID {
             recordFocusStarted(for: nextFocusedTaskID)
+        }
+        if let nextFocusedTaskID {
+            startIterationTimerIfNeeded(for: nextFocusedTaskID)
         }
         guard
             openLinkedAppIfChanged,
@@ -881,6 +963,20 @@ final class TaskStore: ObservableObject {
                 self?.refreshExpiredSnoozes()
             }
         }
+    }
+
+    private func startCountdownRefreshTimer() {
+        countdownRefreshTimer?.invalidate()
+        countdownRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.currentDate = Date()
+            }
+        }
+    }
+
+    private func normalizedIterationTimerMinutes(_ minutes: Int?) -> Int? {
+        guard let minutes, minutes > 0 else { return nil }
+        return min(minutes, 24 * 60)
     }
 
     private func refreshExpiredSnoozes() {
