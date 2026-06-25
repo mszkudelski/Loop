@@ -57,6 +57,7 @@ final class TaskStore: ObservableObject {
 
     @Published private(set) var shortcut: KeyboardShortcutSetting = .defaultShortcut
     @Published private(set) var doneShortcut: KeyboardShortcutSetting = .defaultDoneShortcut
+    @Published private(set) var quickAddShortcut: KeyboardShortcutSetting = .defaultQuickAddShortcut
 
     @Published private(set) var focusedTaskID: UUID? {
         didSet { save() }
@@ -70,6 +71,7 @@ final class TaskStore: ObservableObject {
 
     var onShortcutChange: ((KeyboardShortcutSetting) -> Void)?
     var onDoneShortcutChange: ((KeyboardShortcutSetting) -> Void)?
+    var onQuickAddShortcutChange: ((KeyboardShortcutSetting) -> Void)?
 
     private let defaultsKey = "Loop.store.v1"
     private let fastLoopCompletionThreshold: TimeInterval = 5 * 60
@@ -578,6 +580,18 @@ final class TaskStore: ObservableObject {
         onDoneShortcutChange?(normalizedShortcut)
     }
 
+    func applyQuickAddShortcut(_ newShortcut: KeyboardShortcutSetting) {
+        let normalizedShortcut = newShortcut.normalized
+        guard normalizedShortcut.isValid else {
+            notice = "Choose a shortcut with at least one modifier and a key."
+            return
+        }
+
+        quickAddShortcut = normalizedShortcut
+        save()
+        onQuickAddShortcutChange?(normalizedShortcut)
+    }
+
     func openLinkedApp(for task: LoopTask) {
         guard let linkedApp = task.linkedApp else {
             notice = "No app selected for \(task.title)."
@@ -892,7 +906,8 @@ final class TaskStore: ObservableObject {
             focusedTaskID: focusedTaskID,
             autoOpenFocusedTaskApp: autoOpenFocusedTaskApp,
             shortcut: shortcut.normalized,
-            doneShortcut: doneShortcut.normalized
+            doneShortcut: doneShortcut.normalized,
+            quickAddShortcut: quickAddShortcut.normalized
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults.standard.set(data, forKey: defaultsKey)
@@ -918,6 +933,7 @@ final class TaskStore: ObservableObject {
         focusedTaskID = snapshot.focusedTaskID
         autoOpenFocusedTaskApp = snapshot.autoOpenFocusedTaskApp
         doneShortcut = snapshot.doneShortcut.normalized
+        quickAddShortcut = snapshot.quickAddShortcut.normalized
         tasks = snapshot.tasks.map { task in
             var migratedTask = task
             migratedTask.createdLoop = migratedTask.createdLoop ?? loopNumber
@@ -942,6 +958,7 @@ private struct StoreSnapshot: Codable {
     var autoOpenFocusedTaskApp: Bool
     var shortcut: KeyboardShortcutSetting
     var doneShortcut: KeyboardShortcutSetting
+    var quickAddShortcut: KeyboardShortcutSetting
 
     private enum CodingKeys: String, CodingKey {
         case tasks
@@ -951,6 +968,7 @@ private struct StoreSnapshot: Codable {
         case autoOpenFocusedTaskApp
         case shortcut
         case doneShortcut
+        case quickAddShortcut
     }
 
     init(
@@ -960,7 +978,8 @@ private struct StoreSnapshot: Codable {
         focusedTaskID: UUID?,
         autoOpenFocusedTaskApp: Bool,
         shortcut: KeyboardShortcutSetting,
-        doneShortcut: KeyboardShortcutSetting
+        doneShortcut: KeyboardShortcutSetting,
+        quickAddShortcut: KeyboardShortcutSetting
     ) {
         self.tasks = tasks
         self.loopNumber = loopNumber
@@ -969,6 +988,7 @@ private struct StoreSnapshot: Codable {
         self.autoOpenFocusedTaskApp = autoOpenFocusedTaskApp
         self.shortcut = shortcut
         self.doneShortcut = doneShortcut
+        self.quickAddShortcut = quickAddShortcut
     }
 
     init(from decoder: Decoder) throws {
@@ -980,6 +1000,7 @@ private struct StoreSnapshot: Codable {
         autoOpenFocusedTaskApp = try container.decodeIfPresent(Bool.self, forKey: .autoOpenFocusedTaskApp) ?? true
         shortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .shortcut) ?? .defaultShortcut
         doneShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .doneShortcut) ?? .defaultDoneShortcut
+        quickAddShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .quickAddShortcut) ?? .defaultQuickAddShortcut
     }
 }
 

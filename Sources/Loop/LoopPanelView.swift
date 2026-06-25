@@ -1011,116 +1011,198 @@ private enum PopularApplication: String, CaseIterable, Identifiable {
 private struct ShortcutSettingsView: View {
     @EnvironmentObject private var store: TaskStore
 
-    @State private var openKey = KeyboardShortcutSetting.defaultShortcut.key
-    @State private var openModifiers = KeyboardShortcutSetting.defaultShortcut.modifiers
-    @State private var doneKey = KeyboardShortcutSetting.defaultDoneShortcut.key
-    @State private var doneModifiers = KeyboardShortcutSetting.defaultDoneShortcut.modifiers
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Shortcuts")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Shortcuts")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
 
-            shortcutEditor(
-                title: "Open panel",
-                currentText: store.shortcut.displayText,
-                key: $openKey,
-                modifiers: $openModifiers,
-                defaultShortcut: .defaultShortcut
-            ) {
-                store.applyShortcut(KeyboardShortcutSetting(key: openKey, modifiers: openModifiers))
+                shortcutRecorder(
+                    title: "Open panel",
+                    shortcut: store.shortcut,
+                    onRecord: store.applyShortcut
+                )
+
+                shortcutRecorder(
+                    title: "Done focused task",
+                    shortcut: store.doneShortcut,
+                    onRecord: store.applyDoneShortcut
+                )
+
+                shortcutRecorder(
+                    title: "Quick add to backlog",
+                    shortcut: store.quickAddShortcut,
+                    onRecord: store.applyQuickAddShortcut
+                )
+
+                Divider()
+
+                Toggle("Auto-open focused app", isOn: Binding(
+                    get: {
+                        store.autoOpenFocusedTaskApp
+                    },
+                    set: { isEnabled in
+                        store.setAutoOpenFocusedTaskApp(isEnabled)
+                    }
+                ))
+                .toggleStyle(.checkbox)
             }
-
-            shortcutEditor(
-                title: "Done focused task",
-                currentText: store.doneShortcut.displayText,
-                key: $doneKey,
-                modifiers: $doneModifiers,
-                defaultShortcut: .defaultDoneShortcut
-            ) {
-                store.applyDoneShortcut(KeyboardShortcutSetting(key: doneKey, modifiers: doneModifiers))
-            }
-
-            Divider()
-
-            Toggle("Auto-open focused app", isOn: Binding(
-                get: {
-                    store.autoOpenFocusedTaskApp
-                },
-                set: { isEnabled in
-                    store.setAutoOpenFocusedTaskApp(isEnabled)
-                }
-            ))
-            .toggleStyle(.checkbox)
-
-            Spacer()
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear {
-            openKey = store.shortcut.key
-            openModifiers = store.shortcut.modifiers
-            doneKey = store.doneShortcut.key
-            doneModifiers = store.doneShortcut.modifiers
-        }
     }
 
     @ViewBuilder
-    private func shortcutEditor(
+    private func shortcutRecorder(
         title: String,
-        currentText: String,
-        key: Binding<String>,
-        modifiers: Binding<Set<ShortcutModifier>>,
-        defaultShortcut: KeyboardShortcutSetting,
-        onApply: @escaping () -> Void
+        shortcut: KeyboardShortcutSetting,
+        onRecord: @escaping (KeyboardShortcutSetting) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.callout.weight(.semibold))
 
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    ForEach(ShortcutModifier.allCases) { modifier in
-                        Toggle(modifier.title, isOn: binding(for: modifier, modifiers: modifiers))
-                            .toggleStyle(.checkbox)
-                    }
-                }
-
-                HStack(spacing: 10) {
-                    TextField("Key", text: key)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 80)
-                        .onChange(of: key.wrappedValue) { newValue in
-                            key.wrappedValue = String(newValue.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().prefix(1))
-                        }
-
-                    Button("Apply") {
-                        onApply()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!KeyboardShortcutSetting(key: key.wrappedValue, modifiers: modifiers.wrappedValue).isValid)
-                }
-
-                Text(currentText.isEmpty ? defaultShortcut.displayText : currentText)
-                    .font(.callout.weight(.medium))
-            }
+            ShortcutRecorderView(shortcut: shortcut, onRecord: onRecord)
+                .frame(width: 210, height: 32)
         }
     }
+}
 
-    private func binding(for modifier: ShortcutModifier, modifiers: Binding<Set<ShortcutModifier>>) -> Binding<Bool> {
-        Binding(
-            get: {
-                modifiers.wrappedValue.contains(modifier)
-            },
-            set: { isEnabled in
-                if isEnabled {
-                    modifiers.wrappedValue.insert(modifier)
-                } else {
-                    modifiers.wrappedValue.remove(modifier)
-                }
-            }
+private struct ShortcutRecorderView: NSViewRepresentable {
+    let shortcut: KeyboardShortcutSetting
+    let onRecord: (KeyboardShortcutSetting) -> Void
+
+    func makeNSView(context: Context) -> ShortcutRecorderControl {
+        let control = ShortcutRecorderControl()
+        control.onRecord = onRecord
+        return control
+    }
+
+    func updateNSView(_ nsView: ShortcutRecorderControl, context: Context) {
+        nsView.shortcut = shortcut
+        nsView.onRecord = onRecord
+    }
+}
+
+private final class ShortcutRecorderControl: NSView {
+    var shortcut: KeyboardShortcutSetting = .defaultShortcut {
+        didSet {
+            needsDisplay = true
+            setAccessibilityValue(shortcut.displayText)
+        }
+    }
+    var onRecord: ((KeyboardShortcutSetting) -> Void)?
+    private var isRecording = false {
+        didSet { needsDisplay = true }
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel("Record shortcut")
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isRecording = true
+        window?.makeFirstResponder(self)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard isRecording else {
+            super.keyDown(with: event)
+            return
+        }
+
+        if event.keyCode == 53 {
+            isRecording = false
+            return
+        }
+
+        guard let key = ShortcutKeyMap.key(for: event.keyCode) else {
+            return
+        }
+
+        let modifiers = ShortcutModifier.from(event.modifierFlags)
+        guard !modifiers.isEmpty else {
+            return
+        }
+
+        isRecording = false
+        onRecord?(KeyboardShortcutSetting(key: key, modifiers: modifiers))
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let bounds = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let radius: CGFloat = 6
+        let fill = NSColor.controlBackgroundColor
+        let stroke = isRecording ? NSColor.controlAccentColor : NSColor.separatorColor
+        let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        fill.setFill()
+        path.fill()
+        stroke.setStroke()
+        path.lineWidth = isRecording ? 2 : 1
+        path.stroke()
+
+        let text = isRecording ? "Press shortcut..." : shortcut.displayText
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+            .foregroundColor: NSColor.labelColor
+        ]
+        let attributedText = NSAttributedString(string: text, attributes: attributes)
+        let textSize = attributedText.size()
+        let textRect = NSRect(
+            x: bounds.minX + 10,
+            y: bounds.midY - textSize.height / 2,
+            width: max(0, bounds.width - 20),
+            height: textSize.height
         )
+        attributedText.draw(in: textRect)
+    }
+}
+
+private extension ShortcutModifier {
+    static func from(_ flags: NSEvent.ModifierFlags) -> Set<ShortcutModifier> {
+        let activeFlags = flags.intersection(.deviceIndependentFlagsMask)
+        var modifiers = Set<ShortcutModifier>()
+        if activeFlags.contains(.control) {
+            modifiers.insert(.control)
+        }
+        if activeFlags.contains(.option) {
+            modifiers.insert(.option)
+        }
+        if activeFlags.contains(.command) {
+            modifiers.insert(.command)
+        }
+        if activeFlags.contains(.shift) {
+            modifiers.insert(.shift)
+        }
+        return modifiers
+    }
+}
+
+private enum ShortcutKeyMap {
+    private static let keys: [UInt16: String] = [
+        0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
+        8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
+        16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4", 22: "6",
+        23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8", 29: "0",
+        30: "]", 31: "O", 32: "U", 33: "[", 34: "I", 35: "P", 37: "L",
+        38: "J", 39: "'", 40: "K", 41: ";", 42: "\\", 43: ",", 44: "/",
+        45: "N", 46: "M", 47: ".", 50: "`"
+    ]
+
+    static func key(for keyCode: UInt16) -> String? {
+        keys[keyCode]
     }
 }

@@ -216,6 +216,7 @@ struct KeyboardShortcutSetting: Codable, Equatable {
 
     static let defaultShortcut = KeyboardShortcutSetting(key: "L", modifiers: [.control, .option])
     static let defaultDoneShortcut = KeyboardShortcutSetting(key: "D", modifiers: [.control, .option])
+    static let defaultQuickAddShortcut = KeyboardShortcutSetting(key: "B", modifiers: [.control, .option])
 
     var normalized: KeyboardShortcutSetting {
         let normalizedKey = key
