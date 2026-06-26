@@ -66,6 +66,9 @@ final class TaskStore: ObservableObject {
     @Published private(set) var breakDurationMinutes = 5 {
         didSet { save() }
     }
+    @Published private(set) var defaultIterationTimerMinutes = 2 {
+        didSet { save() }
+    }
 
     @Published private(set) var focusedTaskID: UUID? {
         didSet { save() }
@@ -189,6 +192,10 @@ final class TaskStore: ObservableObject {
 
     var breakDurationSeconds: TimeInterval {
         TimeInterval(breakDurationMinutes * 60)
+    }
+
+    var defaultIterationTimerMinutesOrNil: Int? {
+        normalizedIterationTimerMinutes(defaultIterationTimerMinutes)
     }
 
     var doneTasks: [LoopTask] {
@@ -401,7 +408,8 @@ final class TaskStore: ObservableObject {
         linkedApp: LinkedApp? = nil,
         cadence: LoopCadence = .everyLoop,
         iterationTimerMinutes: Int? = nil,
-        addToIteration: Bool = true
+        addToIteration: Bool = true,
+        useDefaultIterationTimer: Bool = true
     ) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return }
@@ -413,6 +421,7 @@ final class TaskStore: ObservableObject {
             sortOrder: nextSortOrder(),
             createdLoop: addToIteration ? loopNumber : nil,
             iterationTimerMinutes: normalizedIterationTimerMinutes(iterationTimerMinutes)
+                ?? (useDefaultIterationTimer ? defaultIterationTimerMinutesOrNil : nil)
         ))
         ensureFocusedTask()
     }
@@ -680,6 +689,10 @@ final class TaskStore: ObservableObject {
         if isOnBreak, let breakStartedAt {
             breakUntil = breakStartedAt.addingTimeInterval(TimeInterval(clampedMinutes * 60))
         }
+    }
+
+    func setDefaultIterationTimerMinutes(_ minutes: Int) {
+        defaultIterationTimerMinutes = min(max(minutes, 1), 240)
     }
 
     func moveCurrentLoopTask(draggedTaskID: UUID, to targetTaskID: UUID) {
@@ -1347,6 +1360,7 @@ final class TaskStore: ObservableObject {
             breakUntil: breakUntil,
             breakShouldFocusPriorityAfterBreak: breakShouldFocusPriorityAfterBreak,
             breakDurationMinutes: breakDurationMinutes,
+            defaultIterationTimerMinutes: defaultIterationTimerMinutes,
             shortcut: shortcut.normalized,
             doneShortcut: doneShortcut.normalized,
             quickAddShortcut: quickAddShortcut.normalized,
@@ -1384,6 +1398,7 @@ final class TaskStore: ObservableObject {
         breakUntil = snapshot.breakUntil
         breakShouldFocusPriorityAfterBreak = snapshot.breakShouldFocusPriorityAfterBreak
         breakDurationMinutes = min(max(snapshot.breakDurationMinutes, 1), 120)
+        defaultIterationTimerMinutes = min(max(snapshot.defaultIterationTimerMinutes, 1), 240)
         doneShortcut = snapshot.doneShortcut.normalized
         quickAddShortcut = snapshot.quickAddShortcut.normalized
         breakShortcut = snapshot.breakShortcut.normalized
@@ -1425,6 +1440,7 @@ private struct StoreSnapshot: Codable {
     var breakUntil: Date?
     var breakShouldFocusPriorityAfterBreak: Bool
     var breakDurationMinutes: Int
+    var defaultIterationTimerMinutes: Int
     var shortcut: KeyboardShortcutSetting
     var doneShortcut: KeyboardShortcutSetting
     var quickAddShortcut: KeyboardShortcutSetting
@@ -1442,6 +1458,7 @@ private struct StoreSnapshot: Codable {
         case breakUntil
         case breakShouldFocusPriorityAfterBreak
         case breakDurationMinutes
+        case defaultIterationTimerMinutes
         case shortcut
         case doneShortcut
         case quickAddShortcut
@@ -1460,6 +1477,7 @@ private struct StoreSnapshot: Codable {
         breakUntil: Date?,
         breakShouldFocusPriorityAfterBreak: Bool,
         breakDurationMinutes: Int,
+        defaultIterationTimerMinutes: Int,
         shortcut: KeyboardShortcutSetting,
         doneShortcut: KeyboardShortcutSetting,
         quickAddShortcut: KeyboardShortcutSetting,
@@ -1476,6 +1494,7 @@ private struct StoreSnapshot: Codable {
         self.breakUntil = breakUntil
         self.breakShouldFocusPriorityAfterBreak = breakShouldFocusPriorityAfterBreak
         self.breakDurationMinutes = breakDurationMinutes
+        self.defaultIterationTimerMinutes = defaultIterationTimerMinutes
         self.shortcut = shortcut
         self.doneShortcut = doneShortcut
         self.quickAddShortcut = quickAddShortcut
@@ -1495,6 +1514,7 @@ private struct StoreSnapshot: Codable {
         breakUntil = try container.decodeIfPresent(Date.self, forKey: .breakUntil)
         breakShouldFocusPriorityAfterBreak = try container.decodeIfPresent(Bool.self, forKey: .breakShouldFocusPriorityAfterBreak) ?? false
         breakDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .breakDurationMinutes) ?? 5
+        defaultIterationTimerMinutes = try container.decodeIfPresent(Int.self, forKey: .defaultIterationTimerMinutes) ?? 2
         shortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .shortcut) ?? .defaultShortcut
         doneShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .doneShortcut) ?? .defaultDoneShortcut
         quickAddShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .quickAddShortcut) ?? .defaultQuickAddShortcut

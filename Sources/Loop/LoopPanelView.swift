@@ -47,7 +47,8 @@ struct LoopPanelView: View {
                     linkedApp: newTask.linkedApp,
                     cadence: newTask.cadence,
                     iterationTimerMinutes: newTask.iterationTimerMinutes,
-                    addToIteration: !newTask.isBacklog
+                    addToIteration: !newTask.isBacklog,
+                    useDefaultIterationTimer: false
                 )
             }
         }
@@ -933,6 +934,23 @@ private struct GeneralSettingsView: View {
                 Divider()
 
                 VStack(alignment: .leading, spacing: 8) {
+                    Text("Default iteration timer")
+                        .font(.callout.weight(.semibold))
+
+                    Stepper(value: defaultIterationTimerBinding, in: 1...240, step: 1) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "timer")
+                                .foregroundStyle(.secondary)
+                            Text("\(store.defaultIterationTimerMinutes) minutes")
+                                .monospacedDigit()
+                        }
+                    }
+                    .frame(width: 260, alignment: .leading)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 8) {
                     Text("Break duration")
                         .font(.callout.weight(.semibold))
 
@@ -951,6 +969,17 @@ private struct GeneralSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var defaultIterationTimerBinding: Binding<Int> {
+        Binding(
+            get: {
+                store.defaultIterationTimerMinutes
+            },
+            set: { minutes in
+                store.setDefaultIterationTimerMinutes(minutes)
+            }
+        )
     }
 
     private var breakDurationBinding: Binding<Int> {
@@ -1532,6 +1561,7 @@ private enum StatisticsDurationFormatter {
 
 private struct TaskEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var store: TaskStore
 
     @State private var draft: LoopTask
 
@@ -1619,7 +1649,7 @@ private struct TaskEditorView: View {
                         HStack(spacing: 6) {
                             Image(systemName: "timer")
                                 .foregroundStyle(.secondary)
-                            Text("\(draft.iterationTimerMinutes ?? 10) minutes")
+                            Text("\(draft.iterationTimerMinutes ?? store.defaultIterationTimerMinutes) minutes")
                                 .monospacedDigit()
                         }
                     }
@@ -1654,6 +1684,11 @@ private struct TaskEditorView: View {
         }
         .padding(20)
         .frame(width: 380)
+        .onAppear {
+            if isNew && draft.iterationTimerMinutes == nil {
+                draft.iterationTimerMinutes = store.defaultIterationTimerMinutes
+            }
+        }
     }
 
     private func chooseApplication() {
@@ -1669,7 +1704,7 @@ private struct TaskEditorView: View {
             },
             set: { isEnabled in
                 if isEnabled {
-                    draft.iterationTimerMinutes = draft.iterationTimerMinutes ?? 10
+                    draft.iterationTimerMinutes = draft.iterationTimerMinutes ?? store.defaultIterationTimerMinutes
                 } else {
                     draft.iterationTimerMinutes = nil
                 }
@@ -1682,7 +1717,7 @@ private struct TaskEditorView: View {
     private var iterationTimerMinutesBinding: Binding<Int> {
         Binding(
             get: {
-                draft.iterationTimerMinutes ?? 10
+                draft.iterationTimerMinutes ?? store.defaultIterationTimerMinutes
             },
             set: { minutes in
                 draft.iterationTimerMinutes = min(max(minutes, 1), 240)
