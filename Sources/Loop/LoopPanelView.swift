@@ -264,9 +264,18 @@ struct LoopPanelView: View {
             }
 
             HStack(spacing: 8) {
-                TextField("New task", text: $newTaskTitle)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addQuickTask)
+                PanelReturnAwareTextField(
+                    placeholder: "New task",
+                    text: $newTaskTitle,
+                    onReturn: { _ in
+                        addQuickTask()
+                    },
+                    onCommandReturn: { _ in
+                        addQuickBacklogTask()
+                    }
+                )
+                .frame(height: 24)
+                .loopHelp("Enter adds task, Command Enter adds to backlog")
 
                 Picker("Cadence", selection: $newTaskCadence) {
                     ForEach(LoopCadence.allCases) { cadence in
@@ -277,29 +286,12 @@ struct LoopPanelView: View {
                 .pickerStyle(.menu)
                 .frame(width: 104)
 
-                Button(action: addQuickTask) {
-                    Image(systemName: "plus")
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.return, modifiers: [.command])
-                .loopHelp("Add task")
-
-                Button(action: addQuickBacklogTask) {
-                    Image(systemName: "tray.and.arrow.down")
-                }
-                .loopHelp("Add to backlog")
-
                 Button {
                     isAddingDetailedTask = true
                 } label: {
                     Image(systemName: "slider.horizontal.3")
                 }
-                .loopHelp("Add with app")
-
-                Button(action: onQuit) {
-                    Image(systemName: "power")
-                }
-                .loopHelp("Quit")
+                .loopHelp("Add with details")
             }
         }
         .padding(.horizontal, 16)
@@ -315,6 +307,93 @@ struct LoopPanelView: View {
     private func addQuickBacklogTask() {
         store.addTask(title: newTaskTitle, cadence: newTaskCadence, addToIteration: false)
         newTaskTitle = ""
+    }
+}
+
+private struct PanelReturnAwareTextField: NSViewRepresentable {
+    let placeholder: String
+    @Binding var text: String
+    let onReturn: (String) -> Void
+    let onCommandReturn: (String) -> Void
+
+    func makeNSView(context: Context) -> PanelKeyHandlingTextField {
+        let textField = PanelKeyHandlingTextField()
+        textField.placeholderString = placeholder
+        textField.bezelStyle = .roundedBezel
+        textField.isBordered = true
+        textField.drawsBackground = true
+        textField.font = .systemFont(ofSize: NSFont.systemFontSize)
+        textField.delegate = context.coordinator
+        textField.onCommandReturn = onCommandReturn
+        context.coordinator.onReturn = onReturn
+        context.coordinator.onCommandReturn = onCommandReturn
+        context.coordinator.onTextChange = { text = $0 }
+        return textField
+    }
+
+    func updateNSView(_ nsView: PanelKeyHandlingTextField, context: Context) {
+        nsView.stringValue = text
+        nsView.placeholderString = placeholder
+        nsView.onCommandReturn = onCommandReturn
+        context.coordinator.onReturn = onReturn
+        context.coordinator.onCommandReturn = onCommandReturn
+        context.coordinator.onTextChange = { text = $0 }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        @Binding var text: String
+        var onReturn: ((String) -> Void)?
+        var onCommandReturn: ((String) -> Void)?
+        var onTextChange: ((String) -> Void)?
+
+        init(text: Binding<String>) {
+            _text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let textField = notification.object as? NSTextField else { return }
+            text = textField.stringValue
+            onTextChange?(textField.stringValue)
+        }
+
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            let submitCommands: Set<Selector> = [
+                #selector(NSResponder.insertNewline(_:)),
+                #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+                #selector(NSResponder.insertLineBreak(_:))
+            ]
+            guard submitCommands.contains(commandSelector) else {
+                return false
+            }
+
+            let currentText = textView.string
+            text = currentText
+            let modifierFlags = NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags
+            if modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) {
+                onCommandReturn?(currentText)
+            } else {
+                onReturn?(currentText)
+            }
+            return true
+        }
+    }
+}
+
+private final class PanelKeyHandlingTextField: NSTextField {
+    var onCommandReturn: ((String) -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.command), event.keyCode == 36 || event.keyCode == 76 else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        onCommandReturn?(currentEditor()?.string ?? stringValue)
+        return true
     }
 }
 
