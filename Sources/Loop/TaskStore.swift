@@ -525,6 +525,7 @@ final class TaskStore: ObservableObject {
         if !tasks[index].isPriority {
             tasks[index].priorityDeferredLoop = nil
         } else {
+            clearCurrentIterationPriority(except: task.id)
             focusedTaskID = nil
         }
         ensureFocusedTask()
@@ -849,6 +850,16 @@ final class TaskStore: ObservableObject {
     }
 
     private func shouldSuggestMarkingPriority(for task: LoopTask) -> Bool {
+        prioritySuggestionTaskID == task.id
+    }
+
+    private var prioritySuggestionTaskID: UUID? {
+        let currentTasks = currentLoopTasks
+        guard !currentTasks.contains(where: { !$0.doneThisLoop && $0.isPriority }) else { return nil }
+        return currentTasks.first(where: isPrioritySuggestionCandidate)?.id
+    }
+
+    private func isPrioritySuggestionCandidate(_ task: LoopTask) -> Bool {
         guard !task.doneThisLoop, !task.isPriority, task.manualFocusCount >= 2 else { return false }
         return currentLoopTasks.contains { $0.id == task.id }
     }
@@ -983,6 +994,15 @@ final class TaskStore: ObservableObject {
 
     private func clearPriorityDeferrals() {
         for index in tasks.indices where tasks[index].priorityDeferredLoop != nil {
+            tasks[index].priorityDeferredLoop = nil
+            tasks[index].updatedAt = Date()
+        }
+    }
+
+    private func clearCurrentIterationPriority(except selectedTaskID: UUID) {
+        let currentTaskIDs = Set(currentLoopTasks.map(\.id))
+        for index in tasks.indices where tasks[index].id != selectedTaskID && currentTaskIDs.contains(tasks[index].id) && tasks[index].isPriority {
+            tasks[index].isPriority = false
             tasks[index].priorityDeferredLoop = nil
             tasks[index].updatedAt = Date()
         }
