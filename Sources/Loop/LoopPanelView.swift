@@ -17,8 +17,17 @@ struct LoopPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            LoopTasksView(editingTask: $editingTask) {
-                isAddingDetailedTask = true
+            ZStack {
+                LoopTasksView(editingTask: $editingTask) {
+                    isAddingDetailedTask = true
+                }
+                .disabled(store.isOnBreak)
+                .blur(radius: store.isOnBreak ? 1.5 : 0)
+
+                if store.isOnBreak {
+                    BreakOverlayView()
+                        .environmentObject(store)
+                }
             }
             footer
         }
@@ -174,6 +183,42 @@ struct LoopPanelView: View {
     private func addQuickBacklogTask() {
         store.addTask(title: newTaskTitle, cadence: newTaskCadence, addToIteration: false)
         newTaskTitle = ""
+    }
+}
+
+private struct BreakOverlayView: View {
+    @EnvironmentObject private var store: TaskStore
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "cup.and.saucer.fill")
+                .font(.title2)
+                .foregroundStyle(Color.accentColor)
+
+            VStack(spacing: 4) {
+                Text("Break")
+                    .font(.title3.weight(.semibold))
+                Text(remainingText)
+                    .font(.system(.title2, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+            }
+
+            Button {
+                store.endBreak()
+            } label: {
+                Label("End break", systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
+    }
+
+    private var remainingText: String {
+        let seconds = store.breakRemainingSeconds
+        let minutes = seconds / 60
+        let remainder = seconds % 60
+        return String(format: "%d:%02d", minutes, remainder)
     }
 }
 
@@ -1312,6 +1357,12 @@ private struct ShortcutSettingsView: View {
                     title: "Quick add to backlog",
                     shortcut: store.quickAddShortcut,
                     onRecord: store.applyQuickAddShortcut
+                )
+
+                shortcutRecorder(
+                    title: "Start break",
+                    shortcut: store.breakShortcut,
+                    onRecord: store.applyBreakShortcut
                 )
 
                 Divider()

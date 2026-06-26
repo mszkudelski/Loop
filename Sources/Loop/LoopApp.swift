@@ -18,6 +18,7 @@ private enum HotKeyIdentifier {
     static let togglePopover = UInt32(1)
     static let markFocusedTaskDone = UInt32(2)
     static let quickAddTask = UInt32(3)
+    static let startBreak = UInt32(4)
 }
 
 @MainActor
@@ -95,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registerPopoverHotKey(store.shortcut)
         registerDoneHotKey(store.doneShortcut)
         registerQuickAddHotKey(store.quickAddShortcut)
+        registerBreakHotKey(store.breakShortcut)
         store.onShortcutChange = { [weak self] shortcut in
             self?.registerPopoverHotKey(shortcut)
         }
@@ -103,6 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         store.onQuickAddShortcutChange = { [weak self] shortcut in
             self?.registerQuickAddHotKey(shortcut)
+        }
+        store.onBreakShortcutChange = { [weak self] shortcut in
+            self?.registerBreakHotKey(shortcut)
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -128,6 +133,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerQuickAddHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.quickAddTask) { [weak self] in
             self?.showQuickAddWindow()
+        }
+    }
+
+    private func registerBreakHotKey(_ shortcut: KeyboardShortcutSetting) {
+        _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.startBreak) { [weak self] in
+            self?.store.startBreak()
         }
     }
 
@@ -249,10 +260,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItemTitle() {
         guard let button = statusItem?.button else { return }
-        let title = menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
+        let title = store.breakTimerText ?? menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
         button.title = title
         button.imagePosition = title.isEmpty ? .imageOnly : .imageLeft
-        button.toolTip = menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
+        button.toolTip = store.breakTimerText ?? menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
     }
 
     private func truncatedMenuBarTitle(_ title: String?) -> String {

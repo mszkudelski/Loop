@@ -58,6 +58,7 @@ final class TaskStore: ObservableObject {
     @Published private(set) var shortcut: KeyboardShortcutSetting = .defaultShortcut
     @Published private(set) var doneShortcut: KeyboardShortcutSetting = .defaultDoneShortcut
     @Published private(set) var quickAddShortcut: KeyboardShortcutSetting = .defaultQuickAddShortcut
+    @Published private(set) var breakShortcut: KeyboardShortcutSetting = .defaultBreakShortcut
 
     @Published private(set) var focusedTaskID: UUID? {
         didSet { save() }
@@ -71,6 +72,18 @@ final class TaskStore: ObservableObject {
         didSet { save() }
     }
 
+    @Published private(set) var breakStartedAt: Date? {
+        didSet { save() }
+    }
+
+    @Published private(set) var breakUntil: Date? {
+        didSet { save() }
+    }
+
+    @Published private(set) var breakShouldFocusPriorityAfterBreak = false {
+        didSet { save() }
+    }
+
     @Published private(set) var currentDate = Date()
 
     @Published var notice: String?
@@ -78,8 +91,10 @@ final class TaskStore: ObservableObject {
     var onShortcutChange: ((KeyboardShortcutSetting) -> Void)?
     var onDoneShortcutChange: ((KeyboardShortcutSetting) -> Void)?
     var onQuickAddShortcutChange: ((KeyboardShortcutSetting) -> Void)?
+    var onBreakShortcutChange: ((KeyboardShortcutSetting) -> Void)?
 
     private let defaultsKey = "Loop.store.v1"
+    private let defaultBreakDuration: TimeInterval = 5 * 60
     private let fastLoopCompletionThreshold: TimeInterval = 2 * 60
     private let fastLoopSuggestionWindow: TimeInterval = 10 * 60
     private let quickCompletionThreshold: TimeInterval = 20
@@ -105,6 +120,7 @@ final class TaskStore: ObservableObject {
     }
 
     var currentFocusTaskID: UUID? {
+        guard !isOnBreak else { return nil }
         let currentTasks = currentLoopTasks
 
         if let focusedTaskID,
@@ -140,6 +156,22 @@ final class TaskStore: ObservableObject {
 
         let minutes = max(0, Int(ceil(Double(remainingSeconds) / 60.0)))
         return "\(minutes)m"
+    }
+
+    var isOnBreak: Bool {
+        guard let breakUntil else { return false }
+        return breakUntil > currentDate
+    }
+
+    var breakRemainingSeconds: Int {
+        guard let breakUntil else { return 0 }
+        return max(0, Int(ceil(breakUntil.timeIntervalSince(currentDate))))
+    }
+
+    var breakTimerText: String? {
+        guard isOnBreak else { return nil }
+        let minutes = max(0, Int(ceil(Double(breakRemainingSeconds) / 60.0)))
+        return "Break \(minutes)m"
     }
 
     var doneTasks: [LoopTask] {
@@ -700,6 +732,35 @@ final class TaskStore: ObservableObject {
         onQuickAddShortcutChange?(normalizedShortcut)
     }
 
+    func applyBreakShortcut(_ newShortcut: KeyboardShortcutSetting) {
+        let normalizedShortcut = newShortcut.normalized
+        guard normalizedShortcut.isValid else {
+            notice = "Choose a shortcut with at least one modifier and a key."
+            return
+        }
+
+        breakShortcut = normalizedShortcut
+        save()
+        onBreakShortcutChange?(normalizedShortcut)
+    }
+
+    func startBreak() {
+        let now = Date()
+        breakShouldFocusPriorityAfterBreak = completeFocusedTaskForBreak()
+        breakStartedAt = now
+        breakUntil = now.addingTimeInterval(defaultBreakDuration)
+        focusedTaskID = nil
+        lastAutoOpenedFocusedTaskID = nil
+        currentDate = now
+    }
+
+    func endBreak() {
+        breakStartedAt = nil
+        breakUntil = nil
+        currentDate = Date()
+        resumeAfterBreak()
+    }
+
     func openLinkedApp(for task: LoopTask) {
         guard let linkedApp = task.linkedApp else {
             notice = "No app selected for \(task.title)."
@@ -977,6 +1038,37 @@ final class TaskStore: ObservableObject {
         return true
     }
 
+    private func completeFocusedTaskForBreak() -> Bool {
+        guard
+            let currentFocusTaskID,
+            let index = tasks.firstIndex(where: { $0.id == currentFocusTaskID && !$0.finished && !$0.isBacklog && !$0.doneThisLoop })
+        else {
+            return false
+        }
+
+        if tasks[index].isPriority {
+            tasks[index].doneThisLoop = false
+            tasks[index].lastCompletedLoop = nil
+            tasks[index].lastQuickCompletionAt = nil
+            tasks[index].snoozedUntil = nil
+            tasks[index].iterationTimerStartedAt = nil
+            tasks[index].iterationTimerStartedLoop = nil
+            tasks[index].priorityDeferredLoop = loopNumber
+            tasks[index].updatedAt = Date()
+            return false
+        }
+
+        tasks[index].doneThisLoop = true
+        tasks[index].lastCompletedLoop = loopNumber
+        tasks[index].snoozedUntil = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
+        recordQuickCompletionIfNeeded(for: &tasks[index])
+        clearPriorityDeferrals()
+        tasks[index].updatedAt = Date()
+        return true
+    }
+
     private func completePriorityTask(at index: Int, openNextFocusedApp: Bool) {
         guard tasks.indices.contains(index), tasks[index].isPriority, !tasks[index].finished else { return }
         tasks[index].doneThisLoop = false
@@ -1014,6 +1106,21 @@ final class TaskStore: ObservableObject {
             tasks[index].priorityDeferredLoop = nil
             tasks[index].updatedAt = Date()
         }
+    }
+
+    private func resumeAfterBreak() {
+        let shouldFocusPriority = breakShouldFocusPriorityAfterBreak
+        breakShouldFocusPriorityAfterBreak = false
+
+        if shouldFocusPriority, focusPriorityAfterRegularTaskCompletion(openNextFocusedApp: true) {
+            return
+        }
+
+        if advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: true) {
+            return
+        }
+
+        ensureFocusedTask(openLinkedAppIfChanged: true)
     }
 
     private func focusPriorityAfterRegularTaskCompletion(openNextFocusedApp: Bool) -> Bool {
@@ -1096,9 +1203,19 @@ final class TaskStore: ObservableObject {
         countdownRefreshTimer?.invalidate()
         countdownRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.currentDate = Date()
+                self?.tickCurrentDate()
             }
         }
+    }
+
+    private func tickCurrentDate() {
+        currentDate = Date()
+        finishExpiredBreakIfNeeded()
+    }
+
+    private func finishExpiredBreakIfNeeded() {
+        guard let breakUntil, breakUntil <= currentDate else { return }
+        endBreak()
     }
 
     private func normalizedIterationTimerMinutes(_ minutes: Int?) -> Int? {
@@ -1129,9 +1246,13 @@ final class TaskStore: ObservableObject {
             focusedTaskID: focusedTaskID,
             autoOpenFocusedTaskApp: autoOpenFocusedTaskApp,
             dismissedFastLoopSuggestionAt: dismissedFastLoopSuggestionAt,
+            breakStartedAt: breakStartedAt,
+            breakUntil: breakUntil,
+            breakShouldFocusPriorityAfterBreak: breakShouldFocusPriorityAfterBreak,
             shortcut: shortcut.normalized,
             doneShortcut: doneShortcut.normalized,
-            quickAddShortcut: quickAddShortcut.normalized
+            quickAddShortcut: quickAddShortcut.normalized,
+            breakShortcut: breakShortcut.normalized
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
         UserDefaults.standard.set(data, forKey: defaultsKey)
@@ -1148,7 +1269,12 @@ final class TaskStore: ObservableObject {
         isLoading = true
         defer {
             isLoading = false
-            ensureFocusedTask()
+            currentDate = Date()
+            if breakUntil.map({ $0 <= currentDate }) == true {
+                endBreak()
+            } else {
+                ensureFocusedTask()
+            }
             save()
         }
 
@@ -1157,8 +1283,12 @@ final class TaskStore: ObservableObject {
         focusedTaskID = snapshot.focusedTaskID
         autoOpenFocusedTaskApp = snapshot.autoOpenFocusedTaskApp
         dismissedFastLoopSuggestionAt = snapshot.dismissedFastLoopSuggestionAt
+        breakStartedAt = snapshot.breakStartedAt
+        breakUntil = snapshot.breakUntil
+        breakShouldFocusPriorityAfterBreak = snapshot.breakShouldFocusPriorityAfterBreak
         doneShortcut = snapshot.doneShortcut.normalized
         quickAddShortcut = snapshot.quickAddShortcut.normalized
+        breakShortcut = snapshot.breakShortcut.normalized
         tasks = snapshot.tasks.map { task in
             var migratedTask = task
             migratedTask.createdLoop = migratedTask.createdLoop ?? loopNumber
@@ -1192,9 +1322,13 @@ private struct StoreSnapshot: Codable {
     var focusedTaskID: UUID?
     var autoOpenFocusedTaskApp: Bool
     var dismissedFastLoopSuggestionAt: Date?
+    var breakStartedAt: Date?
+    var breakUntil: Date?
+    var breakShouldFocusPriorityAfterBreak: Bool
     var shortcut: KeyboardShortcutSetting
     var doneShortcut: KeyboardShortcutSetting
     var quickAddShortcut: KeyboardShortcutSetting
+    var breakShortcut: KeyboardShortcutSetting
 
     private enum CodingKeys: String, CodingKey {
         case tasks
@@ -1203,9 +1337,13 @@ private struct StoreSnapshot: Codable {
         case focusedTaskID
         case autoOpenFocusedTaskApp
         case dismissedFastLoopSuggestionAt
+        case breakStartedAt
+        case breakUntil
+        case breakShouldFocusPriorityAfterBreak
         case shortcut
         case doneShortcut
         case quickAddShortcut
+        case breakShortcut
     }
 
     init(
@@ -1215,9 +1353,13 @@ private struct StoreSnapshot: Codable {
         focusedTaskID: UUID?,
         autoOpenFocusedTaskApp: Bool,
         dismissedFastLoopSuggestionAt: Date?,
+        breakStartedAt: Date?,
+        breakUntil: Date?,
+        breakShouldFocusPriorityAfterBreak: Bool,
         shortcut: KeyboardShortcutSetting,
         doneShortcut: KeyboardShortcutSetting,
-        quickAddShortcut: KeyboardShortcutSetting
+        quickAddShortcut: KeyboardShortcutSetting,
+        breakShortcut: KeyboardShortcutSetting
     ) {
         self.tasks = tasks
         self.loopNumber = loopNumber
@@ -1225,9 +1367,13 @@ private struct StoreSnapshot: Codable {
         self.focusedTaskID = focusedTaskID
         self.autoOpenFocusedTaskApp = autoOpenFocusedTaskApp
         self.dismissedFastLoopSuggestionAt = dismissedFastLoopSuggestionAt
+        self.breakStartedAt = breakStartedAt
+        self.breakUntil = breakUntil
+        self.breakShouldFocusPriorityAfterBreak = breakShouldFocusPriorityAfterBreak
         self.shortcut = shortcut
         self.doneShortcut = doneShortcut
         self.quickAddShortcut = quickAddShortcut
+        self.breakShortcut = breakShortcut
     }
 
     init(from decoder: Decoder) throws {
@@ -1238,9 +1384,13 @@ private struct StoreSnapshot: Codable {
         focusedTaskID = try container.decodeIfPresent(UUID.self, forKey: .focusedTaskID)
         autoOpenFocusedTaskApp = try container.decodeIfPresent(Bool.self, forKey: .autoOpenFocusedTaskApp) ?? true
         dismissedFastLoopSuggestionAt = try container.decodeIfPresent(Date.self, forKey: .dismissedFastLoopSuggestionAt)
+        breakStartedAt = try container.decodeIfPresent(Date.self, forKey: .breakStartedAt)
+        breakUntil = try container.decodeIfPresent(Date.self, forKey: .breakUntil)
+        breakShouldFocusPriorityAfterBreak = try container.decodeIfPresent(Bool.self, forKey: .breakShouldFocusPriorityAfterBreak) ?? false
         shortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .shortcut) ?? .defaultShortcut
         doneShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .doneShortcut) ?? .defaultDoneShortcut
         quickAddShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .quickAddShortcut) ?? .defaultQuickAddShortcut
+        breakShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .breakShortcut) ?? .defaultBreakShortcut
     }
 }
 
