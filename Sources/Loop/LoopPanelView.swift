@@ -692,7 +692,6 @@ private struct TaskRow: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .loopHelp(rowActionHelp)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 10)
@@ -806,15 +805,6 @@ private struct TaskRow: View {
         }
     }
 
-    private var rowActionHelp: String {
-        if !task.isBacklog && !task.doneThisLoop {
-            return "Focus task"
-        }
-        if task.linkedApp == nil {
-            return "Edit task"
-        }
-        return "Open linked app"
-    }
 }
 
 private struct CadenceBadge: View {
