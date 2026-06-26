@@ -126,7 +126,6 @@ struct LoopPanelView: View {
     let onChooseApplication: () -> LinkedApp?
 
     @State private var newTaskTitle = ""
-    @State private var newTaskCadence: LoopCadence = .everyLoop
     @State private var editingTask: LoopTask?
     @State private var isAddingDetailedTask = false
     @State private var isShowingBacklog = false
@@ -276,15 +275,6 @@ struct LoopPanelView: View {
                 .frame(height: 24)
                 .loopHelp("Enter adds task, Command Enter adds to backlog")
 
-                Picker("Cadence", selection: $newTaskCadence) {
-                    ForEach(LoopCadence.allCases) { cadence in
-                        Text(cadence.compactTitle).tag(cadence)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .frame(width: 104)
-
                 Button {
                     isAddingDetailedTask = true
                 } label: {
@@ -299,12 +289,12 @@ struct LoopPanelView: View {
     }
 
     private func addQuickTask() {
-        store.addTask(title: newTaskTitle, cadence: newTaskCadence)
+        store.addTask(title: newTaskTitle)
         newTaskTitle = ""
     }
 
     private func addQuickBacklogTask() {
-        store.addTask(title: newTaskTitle, cadence: newTaskCadence, addToIteration: false)
+        store.addTask(title: newTaskTitle, addToIteration: false)
         newTaskTitle = ""
     }
 }
