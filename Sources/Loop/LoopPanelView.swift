@@ -729,6 +729,18 @@ private struct TaskRow: View {
                             Label("Snooze 30 minutes", systemImage: "clock")
                         }
                     }
+
+                    Menu {
+                        ForEach(SnoozePreset.secondaryOptions) { preset in
+                            Button {
+                                store.snooze(task, minutes: preset.minutes)
+                            } label: {
+                                Label(preset.title, systemImage: preset.systemImage)
+                            }
+                        }
+                    } label: {
+                        Label("Snooze for...", systemImage: "clock.badge.questionmark")
+                    }
                 }
 
                 Divider()
@@ -794,6 +806,22 @@ private struct TaskRow: View {
         }
     }
 
+}
+
+private struct SnoozePreset: Identifiable {
+    let title: String
+    let minutes: Int
+    let systemImage: String
+
+    var id: Int { minutes }
+
+    static let secondaryOptions = [
+        SnoozePreset(title: "15 minutes", minutes: 15, systemImage: "clock"),
+        SnoozePreset(title: "1 hour", minutes: 60, systemImage: "clock"),
+        SnoozePreset(title: "2 hours", minutes: 120, systemImage: "clock"),
+        SnoozePreset(title: "Tomorrow", minutes: 24 * 60, systemImage: "sunrise"),
+        SnoozePreset(title: "Next week", minutes: 7 * 24 * 60, systemImage: "calendar")
+    ]
 }
 
 private struct CadenceBadge: View {
