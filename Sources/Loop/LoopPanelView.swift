@@ -138,6 +138,7 @@ struct LoopPanelView: View {
                         Image(systemName: "xmark")
                     }
                     .buttonStyle(.plain)
+                    .help("Dismiss notice")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -226,6 +227,7 @@ private struct BreakOverlayView: View {
                 Label("End break", systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
+            .help("End break")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
@@ -365,6 +367,7 @@ private struct LoopSuggestionRow: View {
                     .labelStyle(.titleAndIcon)
             }
             .controlSize(.small)
+            .help(actionTitle)
 
             if let onDismiss {
                 Button(action: onDismiss) {
@@ -502,6 +505,7 @@ private struct TaskRow: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .help(rowActionHelp)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 10)
@@ -613,6 +617,16 @@ private struct TaskRow: View {
         case .snoozeAfterQuickDone:
             store.snooze(task, minutes: 30)
         }
+    }
+
+    private var rowActionHelp: String {
+        if !task.isBacklog && !task.doneThisLoop {
+            return "Focus task"
+        }
+        if task.linkedApp == nil {
+            return "Edit task"
+        }
+        return "Open linked app"
     }
 }
 
@@ -1578,6 +1592,7 @@ private struct TaskEditorView: View {
                             Image(systemName: "xmark")
                         }
                         .buttonStyle(.borderless)
+                        .help("Clear selected app")
                     }
                 }
             }
