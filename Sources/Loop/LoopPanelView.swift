@@ -1269,44 +1269,46 @@ private struct WorkWeekChart: View {
     let days: [WeekSummaryDay]
 
     private var maxValue: Int {
-        max(1, days.map { max($0.iterations, $0.finished) }.max() ?? 0)
+        max(1, days.map { $0.iterations }.max() ?? 0)
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 9) {
+        VStack(spacing: 8) {
             ForEach(days) { day in
-                VStack(spacing: 6) {
-                    HStack(alignment: .bottom, spacing: 3) {
-                        bar(value: day.iterations, maxValue: maxValue, color: .accentColor)
-                        bar(value: day.finished, maxValue: maxValue, color: Color(nsColor: .systemGreen))
-                    }
-                    .frame(height: 82, alignment: .bottom)
+                HStack(spacing: 10) {
+                    dayLabel(for: day)
 
-                    Text(StatisticsDateFormatter.weekday.string(from: day.date))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    ProgressTrack(
+                        value: Double(day.iterations),
+                        maxValue: Double(maxValue),
+                        color: .accentColor
+                    )
+
+                    Text("\(day.iterations)")
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .frame(width: 24, alignment: .trailing)
+
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color(nsColor: .systemGreen))
+                            .frame(width: 7, height: 7)
+                        Text("\(day.finished)")
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .frame(width: 34, alignment: .trailing)
                 }
-                .frame(maxWidth: .infinity)
                 .help("\(day.iterations) loops, \(day.finished) finished")
             }
         }
-        .frame(height: 108)
     }
 
-    private func bar(value: Int, maxValue: Int, color: Color) -> some View {
-        let ratio = CGFloat(value) / CGFloat(maxValue)
-        return RoundedRectangle(cornerRadius: 3, style: .continuous)
-            .fill(color.opacity(value == 0 ? 0.18 : 0.82))
-            .frame(width: 10, height: max(5, 82 * ratio))
-            .overlay(alignment: .top) {
-                if value > 0 {
-                    Text("\(value)")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(.white)
-                        .padding(.top, 2)
-                }
-            }
+    private func dayLabel(for day: WeekSummaryDay) -> some View {
+        Text(StatisticsDateFormatter.weekday.string(from: day.date))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, alignment: .leading)
     }
 }
 
@@ -1318,40 +1320,73 @@ private struct BreakWeekChart: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 9) {
+        VStack(spacing: 8) {
             ForEach(days) { day in
-                VStack(spacing: 6) {
-                    ZStack(alignment: .bottom) {
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color(nsColor: .systemOrange).opacity(0.16))
+                HStack(spacing: 10) {
+                    dayLabel(for: day)
 
-                        RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color(nsColor: .systemOrange).opacity(breakMinutes(for: day) == 0 ? 0.18 : 0.82))
-                            .frame(height: max(5, 82 * CGFloat(breakMinutes(for: day)) / CGFloat(maxMinutes)))
+                    ProgressTrack(
+                        value: Double(breakMinutes(for: day)),
+                        maxValue: Double(maxMinutes),
+                        color: Color(nsColor: .systemOrange)
+                    )
 
-                        if day.breaks > 0 {
-                            Text("\(day.breaks)")
-                                .font(.system(size: 9, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                                .padding(.bottom, 5)
-                        }
+                    Text(StatisticsDurationFormatter.string(from: day.breakDuration))
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .frame(width: 52, alignment: .trailing)
+
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.secondary)
+                            .frame(width: 7, height: 7)
+                        Text("\(day.breaks)")
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
                     }
-                    .frame(width: 24, height: 82)
-
-                    Text(StatisticsDateFormatter.weekday.string(from: day.date))
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    .frame(width: 34, alignment: .trailing)
                 }
-                .frame(maxWidth: .infinity)
                 .help("\(day.breaks) breaks, \(StatisticsDurationFormatter.string(from: day.breakDuration))")
             }
         }
-        .frame(height: 108)
     }
 
     private func breakMinutes(for day: WeekSummaryDay) -> Int {
         Int(ceil(day.breakDuration / 60))
+    }
+
+    private func dayLabel(for day: WeekSummaryDay) -> some View {
+        Text(StatisticsDateFormatter.weekday.string(from: day.date))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, alignment: .leading)
+    }
+}
+
+private struct ProgressTrack: View {
+    let value: Double
+    let maxValue: Double
+    let color: Color
+
+    private var ratio: Double {
+        guard maxValue > 0 else { return 0 }
+        return min(max(value / maxValue, 0), 1)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.secondary.opacity(0.16))
+
+                if value > 0 {
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(color.opacity(0.85))
+                        .frame(width: max(8, proxy.size.width * ratio))
+                }
+            }
+        }
+        .frame(height: 9)
     }
 }
 
