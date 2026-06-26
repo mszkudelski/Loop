@@ -55,6 +55,10 @@ final class TaskStore: ObservableObject {
         didSet { save() }
     }
 
+    @Published private(set) var breakSessions: [BreakSession] = [] {
+        didSet { save() }
+    }
+
     @Published private(set) var shortcut: KeyboardShortcutSetting = .defaultShortcut
     @Published private(set) var doneShortcut: KeyboardShortcutSetting = .defaultDoneShortcut
     @Published private(set) var quickAddShortcut: KeyboardShortcutSetting = .defaultQuickAddShortcut
@@ -242,11 +246,55 @@ final class TaskStore: ObservableObject {
         loopCompletions.filter { Calendar.current.isDate($0.completedAt, inSameDayAs: date) }.count
     }
 
+    func loopsCompleted(in interval: DateInterval) -> Int {
+        loopCompletions.filter { interval.contains($0.completedAt) }.count
+    }
+
     func tasksFinished(on date: Date) -> [LoopTask] {
         finishedTasks.filter { task in
             guard let finishedAt = task.finishedAt else { return false }
             return Calendar.current.isDate(finishedAt, inSameDayAs: date)
         }
+    }
+
+    func tasksFinished(in interval: DateInterval) -> [LoopTask] {
+        finishedTasks.filter { task in
+            guard let finishedAt = task.finishedAt else { return false }
+            return interval.contains(finishedAt)
+        }
+    }
+
+    var breakCountTotal: Int {
+        breakSessions.count + (isOnBreak ? 1 : 0)
+    }
+
+    var breakDurationTotal: TimeInterval {
+        breakSessions.reduce(0) { total, session in
+            total + max(0, session.endedAt.timeIntervalSince(session.startedAt))
+        } + activeBreakDuration(in: nil)
+    }
+
+    func breakCount(on date: Date) -> Int {
+        let completedCount = breakSessions.filter { Calendar.current.isDate($0.startedAt, inSameDayAs: date) }.count
+        let activeCount = breakStartedAt.map { Calendar.current.isDate($0, inSameDayAs: date) } == true ? 1 : 0
+        return completedCount + activeCount
+    }
+
+    func breakCount(in interval: DateInterval) -> Int {
+        let completedCount = breakSessions.filter { interval.contains($0.startedAt) }.count
+        let activeCount = breakStartedAt.map { interval.contains($0) } == true ? 1 : 0
+        return completedCount + activeCount
+    }
+
+    func breakDuration(on date: Date) -> TimeInterval {
+        guard let interval = Calendar.current.dateInterval(of: .day, for: date) else { return 0 }
+        return breakDuration(in: interval)
+    }
+
+    func breakDuration(in interval: DateInterval) -> TimeInterval {
+        breakSessions.reduce(0) { total, session in
+            total + overlapDuration(start: session.startedAt, end: session.endedAt, with: interval)
+        } + activeBreakDuration(in: interval)
     }
 
     var completedTaskStats: [TaskCompletionStat] {
@@ -276,12 +324,23 @@ final class TaskStore: ObservableObject {
         .sorted { $0.finishedAt > $1.finishedAt }
     }
 
+    func completedTaskStats(in interval: DateInterval) -> [TaskCompletionStat] {
+        completedTaskStats(on: nil).filter { interval.contains($0.finishedAt) }
+    }
+
     var averageLoopsToFinish: Double? {
         averageLoopsToFinish(on: nil)
     }
 
     func averageLoopsToFinish(on date: Date?) -> Double? {
         let stats = completedTaskStats(on: date)
+        guard !stats.isEmpty else { return nil }
+        let totalLoops = stats.reduce(0) { $0 + $1.loopsTaken }
+        return Double(totalLoops) / Double(stats.count)
+    }
+
+    func averageLoopsToFinish(in interval: DateInterval) -> Double? {
+        let stats = completedTaskStats(in: interval)
         guard !stats.isEmpty else { return nil }
         let totalLoops = stats.reduce(0) { $0 + $1.loopsTaken }
         return Double(totalLoops) / Double(stats.count)
@@ -781,9 +840,13 @@ final class TaskStore: ObservableObject {
     }
 
     func endBreak() {
+        let now = Date()
+        if let breakStartedAt {
+            breakSessions.append(BreakSession(startedAt: breakStartedAt, endedAt: max(now, breakStartedAt)))
+        }
         breakStartedAt = nil
         breakUntil = nil
-        currentDate = Date()
+        currentDate = now
         resumeAfterBreak()
     }
 
@@ -1238,6 +1301,19 @@ final class TaskStore: ObservableObject {
         currentDate = Date()
     }
 
+    private func activeBreakDuration(in interval: DateInterval?) -> TimeInterval {
+        guard let breakStartedAt else { return 0 }
+        let end = max(currentDate, breakStartedAt)
+        guard let interval else { return max(0, end.timeIntervalSince(breakStartedAt)) }
+        return overlapDuration(start: breakStartedAt, end: end, with: interval)
+    }
+
+    private func overlapDuration(start: Date, end: Date, with interval: DateInterval) -> TimeInterval {
+        let overlapStart = max(start, interval.start)
+        let overlapEnd = min(end, interval.end)
+        return max(0, overlapEnd.timeIntervalSince(overlapStart))
+    }
+
     private func normalizedIterationTimerMinutes(_ minutes: Int?) -> Int? {
         guard let minutes, minutes > 0 else { return nil }
         return min(minutes, 24 * 60)
@@ -1263,6 +1339,7 @@ final class TaskStore: ObservableObject {
             tasks: tasks,
             loopNumber: loopNumber,
             loopCompletions: loopCompletions,
+            breakSessions: breakSessions,
             focusedTaskID: focusedTaskID,
             autoOpenFocusedTaskApp: autoOpenFocusedTaskApp,
             dismissedFastLoopSuggestionAt: dismissedFastLoopSuggestionAt,
@@ -1299,6 +1376,7 @@ final class TaskStore: ObservableObject {
 
         loopNumber = max(1, snapshot.loopNumber)
         loopCompletions = snapshot.loopCompletions
+        breakSessions = snapshot.breakSessions
         focusedTaskID = snapshot.focusedTaskID
         autoOpenFocusedTaskApp = snapshot.autoOpenFocusedTaskApp
         dismissedFastLoopSuggestionAt = snapshot.dismissedFastLoopSuggestionAt
@@ -1339,6 +1417,7 @@ private struct StoreSnapshot: Codable {
     var tasks: [LoopTask]
     var loopNumber: Int
     var loopCompletions: [LoopCompletion]
+    var breakSessions: [BreakSession]
     var focusedTaskID: UUID?
     var autoOpenFocusedTaskApp: Bool
     var dismissedFastLoopSuggestionAt: Date?
@@ -1355,6 +1434,7 @@ private struct StoreSnapshot: Codable {
         case tasks
         case loopNumber
         case loopCompletions
+        case breakSessions
         case focusedTaskID
         case autoOpenFocusedTaskApp
         case dismissedFastLoopSuggestionAt
@@ -1372,6 +1452,7 @@ private struct StoreSnapshot: Codable {
         tasks: [LoopTask],
         loopNumber: Int,
         loopCompletions: [LoopCompletion],
+        breakSessions: [BreakSession],
         focusedTaskID: UUID?,
         autoOpenFocusedTaskApp: Bool,
         dismissedFastLoopSuggestionAt: Date?,
@@ -1387,6 +1468,7 @@ private struct StoreSnapshot: Codable {
         self.tasks = tasks
         self.loopNumber = loopNumber
         self.loopCompletions = loopCompletions
+        self.breakSessions = breakSessions
         self.focusedTaskID = focusedTaskID
         self.autoOpenFocusedTaskApp = autoOpenFocusedTaskApp
         self.dismissedFastLoopSuggestionAt = dismissedFastLoopSuggestionAt
@@ -1405,6 +1487,7 @@ private struct StoreSnapshot: Codable {
         tasks = try container.decodeIfPresent([LoopTask].self, forKey: .tasks) ?? []
         loopNumber = try container.decodeIfPresent(Int.self, forKey: .loopNumber) ?? 1
         loopCompletions = try container.decodeIfPresent([LoopCompletion].self, forKey: .loopCompletions) ?? []
+        breakSessions = try container.decodeIfPresent([BreakSession].self, forKey: .breakSessions) ?? []
         focusedTaskID = try container.decodeIfPresent(UUID.self, forKey: .focusedTaskID)
         autoOpenFocusedTaskApp = try container.decodeIfPresent(Bool.self, forKey: .autoOpenFocusedTaskApp) ?? true
         dismissedFastLoopSuggestionAt = try container.decodeIfPresent(Date.self, forKey: .dismissedFastLoopSuggestionAt)

@@ -181,6 +181,18 @@ struct LoopCompletion: Identifiable, Codable, Equatable {
     }
 }
 
+struct BreakSession: Identifiable, Codable, Equatable {
+    var id: UUID
+    var startedAt: Date
+    var endedAt: Date
+
+    init(id: UUID = UUID(), startedAt: Date, endedAt: Date = Date()) {
+        self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+}
+
 struct TaskCompletionStat: Identifiable, Equatable {
     var id: UUID
     var title: String

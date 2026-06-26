@@ -959,23 +959,29 @@ private struct StatisticsView: View {
                 }
                 .pickerStyle(.segmented)
 
-                if scope == .day {
+                if scope != .total {
                     dateControls
                 }
 
                 LazyVGrid(columns: columns, spacing: 10) {
                     StatTile(title: "Iterations", value: "\(iterationsCount)", systemImage: "arrow.triangle.2.circlepath")
                     StatTile(title: "Finished", value: "\(finishedCount)", systemImage: "checkmark.seal")
+                    StatTile(title: "Breaks", value: "\(breakCount)", systemImage: "cup.and.saucer")
+                    StatTile(title: "Break time", value: breakDurationText, systemImage: "timer")
                     StatTile(
                         title: "Avg Iterations / Task",
                         value: averageText,
                         systemImage: "chart.bar"
                     )
                     StatTile(
-                        title: scope == .day ? "All-Time Finished" : "Days Active",
+                        title: scope == .total ? "Days Active" : "All-Time Finished",
                         value: "\(referenceCount)",
                         systemImage: "list.bullet"
                     )
+                }
+
+                if scope == .week {
+                    WeekSummaryView(days: weekSummaryDays)
                 }
 
                 TaskSection(title: "Finished Tasks", tasks: finishedStats, emptyTitle: "No finished tasks") { stat in
@@ -989,28 +995,28 @@ private struct StatisticsView: View {
     private var dateControls: some View {
         HStack(spacing: 8) {
             Button {
-                moveSelectedDate(by: -1)
+                moveSelectedPeriod(by: -1)
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .help("Previous day")
+            .help(scope == .week ? "Previous week" : "Previous day")
 
             Text(dayTitle)
                 .font(.callout.weight(.semibold))
                 .frame(maxWidth: .infinity)
 
             Button {
-                moveSelectedDate(by: 1)
+                moveSelectedPeriod(by: 1)
             } label: {
                 Image(systemName: "chevron.right")
             }
-            .disabled(isSelectedDateToday)
-            .help("Next day")
+            .disabled(isSelectedPeriodCurrent)
+            .help(scope == .week ? "Next week" : "Next day")
 
             Button("Today") {
                 selectedDate = Date()
             }
-            .disabled(isSelectedDateToday)
+            .disabled(isSelectedPeriodCurrent)
             .controlSize(.small)
         }
     }
@@ -1018,6 +1024,7 @@ private struct StatisticsView: View {
     private var iterationsCount: Int {
         switch scope {
         case .day: store.loopsCompleted(on: selectedDate)
+        case .week: store.loopsCompleted(in: selectedWeekInterval)
         case .total: store.loopsCompletedTotal
         }
     }
@@ -1025,13 +1032,36 @@ private struct StatisticsView: View {
     private var finishedCount: Int {
         switch scope {
         case .day: store.tasksFinished(on: selectedDate).count
+        case .week: store.tasksFinished(in: selectedWeekInterval).count
         case .total: store.completedTaskStats.count
         }
+    }
+
+    private var breakCount: Int {
+        switch scope {
+        case .day: store.breakCount(on: selectedDate)
+        case .week: store.breakCount(in: selectedWeekInterval)
+        case .total: store.breakCountTotal
+        }
+    }
+
+    private var breakDurationText: String {
+        let duration: TimeInterval
+        switch scope {
+        case .day:
+            duration = store.breakDuration(on: selectedDate)
+        case .week:
+            duration = store.breakDuration(in: selectedWeekInterval)
+        case .total:
+            duration = store.breakDurationTotal
+        }
+        return StatisticsDurationFormatter.string(from: duration)
     }
 
     private var finishedStats: [TaskCompletionStat] {
         switch scope {
         case .day: store.completedTaskStats(on: selectedDate)
+        case .week: store.completedTaskStats(in: selectedWeekInterval)
         case .total: store.completedTaskStats
         }
     }
@@ -1039,19 +1069,29 @@ private struct StatisticsView: View {
     private var referenceCount: Int {
         switch scope {
         case .day: store.completedTaskStats.count
+        case .week: store.completedTaskStats.count
         case .total: store.daysActiveTotal
         }
     }
 
     private var averageText: String {
-        let average = scope == .day
-            ? store.averageLoopsToFinish(on: selectedDate)
-            : store.averageLoopsToFinish
+        let average: Double?
+        switch scope {
+        case .day:
+            average = store.averageLoopsToFinish(on: selectedDate)
+        case .week:
+            average = store.averageLoopsToFinish(in: selectedWeekInterval)
+        case .total:
+            average = store.averageLoopsToFinish
+        }
         guard let average else { return "-" }
         return String(format: "%.1f", average)
     }
 
     private var dayTitle: String {
+        if scope == .week {
+            return weekTitle
+        }
         if Calendar.current.isDateInToday(selectedDate) {
             return "Today"
         }
@@ -1061,17 +1101,62 @@ private struct StatisticsView: View {
         return StatisticsDateFormatter.day.string(from: selectedDate)
     }
 
-    private var isSelectedDateToday: Bool {
-        Calendar.current.isDateInToday(selectedDate)
+    private var weekTitle: String {
+        let interval = selectedWeekInterval
+        let end = Calendar.current.date(byAdding: .day, value: -1, to: interval.end) ?? interval.end
+        if Calendar.current.isDate(Date(), equalTo: interval.start, toGranularity: .weekOfYear) {
+            return "This Week"
+        }
+        return "\(StatisticsDateFormatter.shortDay.string(from: interval.start)) - \(StatisticsDateFormatter.shortDay.string(from: end))"
     }
 
-    private func moveSelectedDate(by days: Int) {
-        selectedDate = Calendar.current.date(byAdding: .day, value: days, to: selectedDate) ?? selectedDate
+    private var isSelectedPeriodCurrent: Bool {
+        switch scope {
+        case .day:
+            return Calendar.current.isDateInToday(selectedDate)
+        case .week:
+            return Calendar.current.isDate(Date(), equalTo: selectedDate, toGranularity: .weekOfYear)
+        case .total:
+            return true
+        }
+    }
+
+    private var selectedWeekInterval: DateInterval {
+        Calendar.current.dateInterval(of: .weekOfYear, for: selectedDate)
+            ?? DateInterval(start: selectedDate, duration: 7 * 24 * 60 * 60)
+    }
+
+    private var weekSummaryDays: [WeekSummaryDay] {
+        let calendar = Calendar.current
+        let interval = selectedWeekInterval
+        return (0..<7).compactMap { offset in
+            guard
+                let day = calendar.date(byAdding: .day, value: offset, to: interval.start),
+                day < interval.end
+            else {
+                return nil
+            }
+
+            return WeekSummaryDay(
+                id: day,
+                date: day,
+                iterations: store.loopsCompleted(on: day),
+                finished: store.tasksFinished(on: day).count,
+                breaks: store.breakCount(on: day),
+                breakDuration: store.breakDuration(on: day)
+            )
+        }
+    }
+
+    private func moveSelectedPeriod(by amount: Int) {
+        let component: Calendar.Component = scope == .week ? .weekOfYear : .day
+        selectedDate = Calendar.current.date(byAdding: component, value: amount, to: selectedDate) ?? selectedDate
     }
 }
 
 private enum StatisticsScope: String, CaseIterable, Identifiable {
     case day
+    case week
     case total
 
     var id: String { rawValue }
@@ -1079,8 +1164,89 @@ private enum StatisticsScope: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .day: "Day"
+        case .week: "Week"
         case .total: "Total"
         }
+    }
+}
+
+private struct WeekSummaryDay: Identifiable, Equatable {
+    var id: Date
+    var date: Date
+    var iterations: Int
+    var finished: Int
+    var breaks: Int
+    var breakDuration: TimeInterval
+}
+
+private struct WeekSummaryView: View {
+    let days: [WeekSummaryDay]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Week Summary")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            VStack(spacing: 0) {
+                ForEach(days) { day in
+                    WeekSummaryRow(day: day)
+
+                    if day.id != days.last?.id {
+                        Divider()
+                    }
+                }
+            }
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+}
+
+private struct WeekSummaryRow: View {
+    let day: WeekSummaryDay
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dayTitle)
+                    .font(.callout.weight(.semibold))
+                Text(StatisticsDateFormatter.shortDate.string(from: day.date))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 84, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            summaryValue("\(day.iterations)", "Loops")
+            summaryValue("\(day.finished)", "Done")
+            summaryValue("\(day.breaks)", "Breaks")
+            summaryValue(StatisticsDurationFormatter.string(from: day.breakDuration), "Break time")
+                .frame(width: 78, alignment: .trailing)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+    }
+
+    private var dayTitle: String {
+        if Calendar.current.isDateInToday(day.date) {
+            return "Today"
+        }
+        return StatisticsDateFormatter.weekday.string(from: day.date)
+    }
+
+    private func summaryValue(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Text(value)
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .frame(width: 52, alignment: .trailing)
     }
 }
 
@@ -1170,12 +1336,44 @@ private enum StatisticsDateFormatter {
         return formatter
     }()
 
+    static let shortDay: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        return formatter
+    }()
+
+    static let shortDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("d MMM")
+        return formatter
+    }()
+
+    static let weekday: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("EEE")
+        return formatter
+    }()
+
     static let shortDateTime: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .short
         formatter.timeStyle = .short
         return formatter
     }()
+}
+
+private enum StatisticsDurationFormatter {
+    static let compact: DateComponentsFormatter = {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute]
+        formatter.unitsStyle = .abbreviated
+        formatter.zeroFormattingBehavior = [.dropAll]
+        return formatter
+    }()
+
+    static func string(from duration: TimeInterval) -> String {
+        compact.string(from: max(0, duration)) ?? "0m"
+    }
 }
 
 private struct TaskEditorView: View {
