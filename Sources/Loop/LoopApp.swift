@@ -75,7 +75,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configurePopover() {
         let rootView = LoopPanelView(
-            onQuit: { NSApp.terminate(nil) },
             onChooseApplication: { [weak self] in
                 self?.chooseApplication()
             }
@@ -223,8 +222,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appNameItem = NSMenuItem(title: appDisplayName, action: nil, keyEquivalent: "")
         appNameItem.isEnabled = false
         menu.addItem(appNameItem)
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit \(appDisplayName)", action: #selector(quitFromStatusMenu), keyEquivalent: "q"))
 
         menu.popUp(positioning: appNameItem, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    @objc private func quitFromStatusMenu(_ sender: Any?) {
+        NSApp.terminate(nil)
     }
 
     private var appDisplayName: String {

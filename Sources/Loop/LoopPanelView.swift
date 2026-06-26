@@ -123,7 +123,6 @@ private struct LoopTooltipBubble: View {
 struct LoopPanelView: View {
     @EnvironmentObject private var store: TaskStore
 
-    let onQuit: () -> Void
     let onChooseApplication: () -> LinkedApp?
 
     @State private var newTaskTitle = ""
