@@ -184,7 +184,7 @@ struct LoopPanelView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Loop")
                         .font(.title2.weight(.semibold))
-                    Text("Iteration \(store.loopNumber)")
+                    Text("\(store.loopsCompletedToday) today")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
@@ -1798,12 +1798,13 @@ private struct TaskEditorView: View {
             }
 
             taskEditorSection("Cadence") {
-                Picker("Cadence", selection: $draft.cadence) {
+                Picker("", selection: $draft.cadence) {
                     ForEach(LoopCadence.allCases) { cadence in
                         Text(cadence.compactTitle).tag(cadence)
                     }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
             }
 
             taskEditorSection("Iteration timer") {
@@ -1823,20 +1824,27 @@ private struct TaskEditorView: View {
                     dismiss()
                 }
                 Button("Save") {
-                    onSave(draft)
-                    dismiss()
+                    save()
                 }
                 .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: [])
                 .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)
         .frame(width: 380)
+        .onSubmit(save)
         .onAppear {
             if isNew && draft.iterationTimerMinutes == nil {
                 draft.iterationTimerMinutes = store.defaultIterationTimerMinutes
             }
         }
+    }
+
+    private func save() {
+        guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        onSave(draft)
+        dismiss()
     }
 
     private func chooseApplication() {

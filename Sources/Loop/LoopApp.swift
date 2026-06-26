@@ -504,13 +504,13 @@ private struct QuickAddTaskView: View {
                 .frame(width: 18)
 
             ReturnAwareTextField(
-                placeholder: "Add task to backlog",
+                placeholder: "Add task",
                 text: $title,
                 onReturn: { currentTitle in
-                    submit(currentTitle, addToIteration: false)
+                    submit(currentTitle, addToIteration: true)
                 },
                 onCommandReturn: { currentTitle in
-                    submit(currentTitle, addToIteration: true)
+                    submit(currentTitle, addToIteration: false)
                 },
                 onTextChange: { currentTitle in
                     title = currentTitle
