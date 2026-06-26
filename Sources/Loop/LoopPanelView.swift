@@ -1807,17 +1807,12 @@ private struct TaskEditorView: View {
             }
 
             taskEditorSection("Iteration timer") {
-                Toggle("Iteration timer", isOn: iterationTimerEnabledBinding)
-                    .toggleStyle(.checkbox)
-
-                if draft.iterationTimerMinutes != nil {
-                    Stepper(value: iterationTimerMinutesBinding, in: 1...240, step: 1) {
-                        HStack(spacing: 6) {
-                            Image(systemName: "timer")
-                                .foregroundStyle(.secondary)
-                            Text("\(draft.iterationTimerMinutes ?? store.defaultIterationTimerMinutes) minutes")
-                                .monospacedDigit()
-                        }
+                Stepper(value: iterationTimerMinutesBinding, in: 0...240, step: 1) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "timer")
+                            .foregroundStyle(.secondary)
+                        Text(iterationTimerText)
+                            .monospacedDigit()
                     }
                 }
             }
@@ -1864,30 +1859,19 @@ private struct TaskEditorView: View {
         }
     }
 
-    private var iterationTimerEnabledBinding: Binding<Bool> {
-        Binding(
-            get: {
-                draft.iterationTimerMinutes != nil
-            },
-            set: { isEnabled in
-                if isEnabled {
-                    draft.iterationTimerMinutes = draft.iterationTimerMinutes ?? store.defaultIterationTimerMinutes
-                } else {
-                    draft.iterationTimerMinutes = nil
-                }
-                draft.iterationTimerStartedAt = nil
-                draft.iterationTimerStartedLoop = nil
-            }
-        )
+    private var iterationTimerText: String {
+        guard let minutes = draft.iterationTimerMinutes else { return "0 minutes" }
+        return "\(minutes) \(minutes == 1 ? "minute" : "minutes")"
     }
 
     private var iterationTimerMinutesBinding: Binding<Int> {
         Binding(
             get: {
-                draft.iterationTimerMinutes ?? store.defaultIterationTimerMinutes
+                draft.iterationTimerMinutes ?? 0
             },
             set: { minutes in
-                draft.iterationTimerMinutes = min(max(minutes, 1), 240)
+                let clampedMinutes = min(max(minutes, 0), 240)
+                draft.iterationTimerMinutes = clampedMinutes == 0 ? nil : clampedMinutes
                 draft.iterationTimerStartedAt = nil
                 draft.iterationTimerStartedLoop = nil
             }
