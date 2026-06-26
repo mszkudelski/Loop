@@ -21,12 +21,13 @@ struct LoopPanelView: View {
                 LoopTasksView(editingTask: $editingTask) {
                     isAddingDetailedTask = true
                 }
-                .disabled(store.isOnBreak)
+                .allowsHitTesting(!store.isOnBreak)
                 .blur(radius: store.isOnBreak ? 1.5 : 0)
 
                 if store.isOnBreak {
                     BreakOverlayView()
                         .environmentObject(store)
+                        .zIndex(1)
                 }
             }
             footer
@@ -72,6 +73,17 @@ struct LoopPanelView: View {
                 }
 
                 Spacer()
+
+                if store.isOnBreak {
+                    Button {
+                        store.endBreak()
+                    } label: {
+                        Label("End break", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .help("End break")
+                }
 
                 HStack(spacing: 12) {
                     Button {
