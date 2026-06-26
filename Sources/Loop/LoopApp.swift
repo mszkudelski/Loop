@@ -31,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isChoosingApplication = false
     private var focusBannerWindow: NSPanel?
     private var focusBannerDismissWorkItem: DispatchWorkItem?
+    private var timerExpirationContext: TimerExpirationContext?
+    private var nextTimerExpirationBannerAt: Date?
     private var quickAddWindow: NSPanel?
     private var quickAddDraft = ""
 
@@ -153,6 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
                     self?.updateStatusItemTitle()
+                    self?.evaluateTimerExpirationBanner()
                 }
             }
             .store(in: &cancellables)
@@ -320,13 +323,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showFocusBanner() {
         let bannerState = FocusBannerState(task: store.focusedTask)
-        let bannerView = FocusBannerView(state: bannerState) { [weak self] in
+        showBanner(state: bannerState) { [weak self] in
             guard let self else { return }
             if let focusedTask = self.store.focusedTask {
                 self.store.openLinkedApp(for: focusedTask)
             }
             self.dismissFocusBanner()
         }
+    }
+
+    private func evaluateTimerExpirationBanner() {
+        guard
+            let focusedTask = store.focusedTask,
+            focusedTask.iterationTimerStartedLoop == store.loopNumber,
+            let startedAt = focusedTask.iterationTimerStartedAt,
+            let remainingSeconds = store.iterationTimerRemainingSeconds(for: focusedTask),
+            remainingSeconds <= 0
+        else {
+            resetTimerExpirationReminder()
+            return
+        }
+
+        let context = TimerExpirationContext(taskID: focusedTask.id, startedAt: startedAt)
+        if timerExpirationContext != context {
+            timerExpirationContext = context
+            nextTimerExpirationBannerAt = Date()
+        }
+
+        let now = Date()
+        guard nextTimerExpirationBannerAt.map({ now >= $0 }) ?? true else { return }
+
+        showTimerExpiredBanner(for: focusedTask)
+        nextTimerExpirationBannerAt = now.addingTimeInterval(60)
+    }
+
+    private func resetTimerExpirationReminder() {
+        timerExpirationContext = nil
+        nextTimerExpirationBannerAt = nil
+    }
+
+    private func showTimerExpiredBanner(for task: LoopTask) {
+        showBanner(
+            state: FocusBannerState(
+                title: "Time is up",
+                subtitle: task.title,
+                systemImage: "timer"
+            ),
+            onClick: {}
+        )
+    }
+
+    private func showBanner(state: FocusBannerState, onClick: @escaping () -> Void) {
+        let bannerView = FocusBannerView(state: state, onClick: onClick)
 
         let bannerSize = NSSize(width: 390, height: 78)
         let panel = focusBannerWindow ?? NSPanel(
@@ -568,11 +616,23 @@ private extension NSView {
     }
 }
 
+private struct TimerExpirationContext: Equatable {
+    let taskID: UUID
+    let startedAt: Date
+}
+
 private struct FocusBannerState {
     let title: String
     let subtitle: String
     let systemImage: String
     let isClickable: Bool
+
+    init(title: String, subtitle: String, systemImage: String, isClickable: Bool = false) {
+        self.title = title
+        self.subtitle = subtitle
+        self.systemImage = systemImage
+        self.isClickable = isClickable
+    }
 
     init(task: LoopTask?) {
         if let task {
