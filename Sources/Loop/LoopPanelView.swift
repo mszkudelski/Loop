@@ -1,6 +1,125 @@
 import AppKit
 import SwiftUI
 
+private extension View {
+    func loopHelp(_ text: String) -> some View {
+        modifier(LoopTooltipModifier(text: text))
+    }
+}
+
+private struct LoopTooltipModifier: ViewModifier {
+    let text: String
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .help(text)
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            .background(LoopTooltipHost(text: text, isVisible: isHovered).frame(width: 0, height: 0))
+    }
+}
+
+private struct LoopTooltipHost: NSViewRepresentable {
+    let text: String
+    let isVisible: Bool
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            if isVisible {
+                context.coordinator.show(text: text, relativeTo: nsView)
+            } else {
+                context.coordinator.close()
+            }
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.close()
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    @MainActor
+    final class Coordinator {
+        private var panel: NSPanel?
+
+        func show(text: String, relativeTo view: NSView) {
+            guard let window = view.window else { return }
+
+            let tooltipPanel = panel ?? NSPanel(
+                contentRect: .zero,
+                styleMask: [.borderless, .nonactivatingPanel],
+                backing: .buffered,
+                defer: false
+            )
+            tooltipPanel.contentView = NSHostingView(rootView: LoopTooltipBubble(text: text))
+            tooltipPanel.backgroundColor = .clear
+            tooltipPanel.isOpaque = false
+            tooltipPanel.hasShadow = true
+            tooltipPanel.hidesOnDeactivate = false
+            tooltipPanel.isFloatingPanel = true
+            tooltipPanel.ignoresMouseEvents = true
+            tooltipPanel.level = .statusBar
+            tooltipPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+            tooltipPanel.setContentSize(tooltipPanel.contentView?.fittingSize ?? NSSize(width: 80, height: 26))
+
+            position(tooltipPanel, relativeTo: view, in: window)
+            panel = tooltipPanel
+            tooltipPanel.orderFrontRegardless()
+        }
+
+        func close() {
+            panel?.close()
+            panel = nil
+        }
+
+        private func position(_ panel: NSPanel, relativeTo view: NSView, in window: NSWindow) {
+            let viewFrameInWindow = view.convert(view.bounds, to: nil)
+            let viewFrameOnScreen = window.convertToScreen(viewFrameInWindow)
+            let size = panel.frame.size
+            let screenFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? .zero
+            let padding: CGFloat = 8
+
+            var x = viewFrameOnScreen.midX - (size.width / 2)
+            var y = viewFrameOnScreen.maxY + padding
+            if y + size.height > screenFrame.maxY - padding {
+                y = viewFrameOnScreen.minY - size.height - padding
+            }
+
+            x = min(max(x, screenFrame.minX + padding), screenFrame.maxX - size.width - padding)
+            y = min(max(y, screenFrame.minY + padding), screenFrame.maxY - size.height - padding)
+            panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
+        }
+    }
+}
+
+private struct LoopTooltipBubble: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(Color(nsColor: .labelColor))
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .background(.regularMaterial, in: Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(Color.primary.opacity(0.14), lineWidth: 1)
+            }
+            .fixedSize()
+    }
+}
+
 struct LoopPanelView: View {
     @EnvironmentObject private var store: TaskStore
 
@@ -82,7 +201,7 @@ struct LoopPanelView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .help("End break")
+                    .loopHelp("End break")
                 }
 
                 HStack(spacing: 12) {
@@ -94,7 +213,7 @@ struct LoopPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(Color.accentColor)
-                    .help("Next iteration")
+                    .loopHelp("Next iteration")
 
                     Button {
                         isShowingBacklog = true
@@ -104,7 +223,7 @@ struct LoopPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .help("Backlog")
+                    .loopHelp("Backlog")
 
                     Button {
                         isShowingSettings = true
@@ -114,7 +233,7 @@ struct LoopPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .help("Settings")
+                    .loopHelp("Settings")
                 }
             }
         }
@@ -138,7 +257,7 @@ struct LoopPanelView: View {
                         Image(systemName: "xmark")
                     }
                     .buttonStyle(.plain)
-                    .help("Dismiss notice")
+                    .loopHelp("Dismiss notice")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -163,24 +282,24 @@ struct LoopPanelView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.return, modifiers: [.command])
-                .help("Add task")
+                .loopHelp("Add task")
 
                 Button(action: addQuickBacklogTask) {
                     Image(systemName: "tray.and.arrow.down")
                 }
-                .help("Add to backlog")
+                .loopHelp("Add to backlog")
 
                 Button {
                     isAddingDetailedTask = true
                 } label: {
                     Image(systemName: "slider.horizontal.3")
                 }
-                .help("Add with app")
+                .loopHelp("Add with app")
 
                 Button(action: onQuit) {
                     Image(systemName: "power")
                 }
-                .help("Quit")
+                .loopHelp("Quit")
             }
         }
         .padding(.horizontal, 16)
@@ -227,7 +346,7 @@ private struct BreakOverlayView: View {
                 Label("End break", systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
-            .help("End break")
+            .loopHelp("End break")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
@@ -367,7 +486,7 @@ private struct LoopSuggestionRow: View {
                     .labelStyle(.titleAndIcon)
             }
             .controlSize(.small)
-            .help(actionTitle)
+            .loopHelp(actionTitle)
 
             if let onDismiss {
                 Button(action: onDismiss) {
@@ -377,7 +496,7 @@ private struct LoopSuggestionRow: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Dismiss")
+                .loopHelp("Dismiss")
             }
         }
         .padding(.horizontal, 8)
@@ -453,7 +572,7 @@ private struct TaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(task.isBacklog)
-                .help(task.isBacklog ? "Backlog" : (task.doneThisLoop ? "Reopen" : "Done"))
+                .loopHelp(task.isBacklog ? "Backlog" : (task.doneThisLoop ? "Reopen" : "Done"))
 
                 Button {
                     if !task.isBacklog && !task.doneThisLoop {
@@ -477,7 +596,7 @@ private struct TaskRow: View {
                                 Image(systemName: "star.fill")
                                     .font(.caption)
                                     .foregroundStyle(.yellow)
-                                    .help("Priority")
+                                    .loopHelp("Priority")
                             }
                         }
 
@@ -505,7 +624,7 @@ private struct TaskRow: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .help(rowActionHelp)
+                .loopHelp(rowActionHelp)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 10)
@@ -725,7 +844,7 @@ private struct BacklogPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Close")
+                .loopHelp("Close")
             }
             .padding(16)
 
@@ -776,7 +895,7 @@ private struct BacklogTaskRow: View {
                         Image(systemName: "star.fill")
                             .font(.caption)
                             .foregroundStyle(.yellow)
-                            .help("Priority")
+                            .loopHelp("Priority")
                     }
                 }
 
@@ -805,14 +924,14 @@ private struct BacklogTaskRow: View {
             } label: {
                 Image(systemName: "arrow.up.circle")
             }
-            .help("Add to iteration")
+            .loopHelp("Add to iteration")
 
             Button {
                 onEdit()
             } label: {
                 Image(systemName: "pencil")
             }
-            .help("Edit")
+            .loopHelp("Edit")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -873,7 +992,7 @@ private struct SettingsPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Close")
+                .loopHelp("Close")
             }
             .padding(16)
 
@@ -1053,7 +1172,7 @@ private struct StatisticsView: View {
             } label: {
                 Image(systemName: "chevron.left")
             }
-            .help(scope == .week ? "Previous week" : "Previous day")
+            .loopHelp(scope == .week ? "Previous week" : "Previous day")
 
             Text(dayTitle)
                 .font(.callout.weight(.semibold))
@@ -1065,7 +1184,7 @@ private struct StatisticsView: View {
                 Image(systemName: "chevron.right")
             }
             .disabled(isSelectedPeriodCurrent)
-            .help(scope == .week ? "Next week" : "Next day")
+            .loopHelp(scope == .week ? "Next week" : "Next day")
 
             Button("Today") {
                 selectedDate = Date()
@@ -1341,7 +1460,7 @@ private struct WorkWeekChart: View {
                     }
                     .frame(width: 34, alignment: .trailing)
                 }
-                .help("\(day.iterations) loops, \(day.finished) finished")
+                .loopHelp("\(day.iterations) loops, \(day.finished) finished")
             }
         }
     }
@@ -1388,7 +1507,7 @@ private struct BreakWeekChart: View {
                     }
                     .frame(width: 34, alignment: .trailing)
                 }
-                .help("\(day.breaks) breaks, \(StatisticsDurationFormatter.string(from: day.breakDuration))")
+                .loopHelp("\(day.breaks) breaks, \(StatisticsDurationFormatter.string(from: day.breakDuration))")
             }
         }
     }
@@ -1621,7 +1740,7 @@ private struct TaskEditorView: View {
                             Image(systemName: "xmark")
                         }
                         .buttonStyle(.borderless)
-                        .help("Clear selected app")
+                        .loopHelp("Clear selected app")
                     }
                 }
             }
