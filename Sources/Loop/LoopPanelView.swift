@@ -1201,64 +1201,157 @@ private struct WeekSummaryView: View {
                 .foregroundStyle(.secondary)
                 .textCase(.uppercase)
 
-            VStack(spacing: 0) {
-                ForEach(days) { day in
-                    WeekSummaryRow(day: day)
-
-                    if day.id != days.last?.id {
-                        Divider()
-                    }
-                }
+            WeekChartCard(
+                title: "Output",
+                legend: [
+                    WeekChartLegendItem(title: "Loops", color: .accentColor),
+                    WeekChartLegendItem(title: "Finished", color: Color(nsColor: .systemGreen))
+                ]
+            ) {
+                WorkWeekChart(days: days)
             }
-            .background(Color(nsColor: .controlBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+            WeekChartCard(
+                title: "Breaks",
+                legend: [
+                    WeekChartLegendItem(title: "Time", color: Color(nsColor: .systemOrange)),
+                    WeekChartLegendItem(title: "Count", color: .secondary)
+                ]
+            ) {
+                BreakWeekChart(days: days)
+            }
         }
     }
 }
 
-private struct WeekSummaryRow: View {
-    let day: WeekSummaryDay
+private struct WeekChartLegendItem: Identifiable {
+    var id: String { title }
+    var title: String
+    var color: Color
+}
+
+private struct WeekChartCard<Content: View>: View {
+    let title: String
+    let legend: [WeekChartLegendItem]
+    @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(dayTitle)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text(title)
                     .font(.callout.weight(.semibold))
-                Text(StatisticsDateFormatter.shortDate.string(from: day.date))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                HStack(spacing: 8) {
+                    ForEach(legend) { item in
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(item.color)
+                                .frame(width: 7, height: 7)
+                            Text(item.title)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
-            .frame(width: 84, alignment: .leading)
 
-            Spacer(minLength: 0)
-
-            summaryValue("\(day.iterations)", "Loops")
-            summaryValue("\(day.finished)", "Done")
-            summaryValue("\(day.breaks)", "Breaks")
-            summaryValue(StatisticsDurationFormatter.string(from: day.breakDuration), "Break time")
-                .frame(width: 78, alignment: .trailing)
+            content
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct WorkWeekChart: View {
+    let days: [WeekSummaryDay]
+
+    private var maxValue: Int {
+        max(1, days.map { max($0.iterations, $0.finished) }.max() ?? 0)
     }
 
-    private var dayTitle: String {
-        if Calendar.current.isDateInToday(day.date) {
-            return "Today"
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 9) {
+            ForEach(days) { day in
+                VStack(spacing: 6) {
+                    HStack(alignment: .bottom, spacing: 3) {
+                        bar(value: day.iterations, maxValue: maxValue, color: .accentColor)
+                        bar(value: day.finished, maxValue: maxValue, color: Color(nsColor: .systemGreen))
+                    }
+                    .frame(height: 82, alignment: .bottom)
+
+                    Text(StatisticsDateFormatter.weekday.string(from: day.date))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .help("\(day.iterations) loops, \(day.finished) finished")
+            }
         }
-        return StatisticsDateFormatter.weekday.string(from: day.date)
+        .frame(height: 108)
     }
 
-    private func summaryValue(_ value: String, _ label: String) -> some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text(value)
-                .font(.callout.weight(.semibold))
-                .monospacedDigit()
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+    private func bar(value: Int, maxValue: Int, color: Color) -> some View {
+        let ratio = CGFloat(value) / CGFloat(maxValue)
+        return RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(color.opacity(value == 0 ? 0.18 : 0.82))
+            .frame(width: 10, height: max(5, 82 * ratio))
+            .overlay(alignment: .top) {
+                if value > 0 {
+                    Text("\(value)")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                        .padding(.top, 2)
+                }
+            }
+    }
+}
+
+private struct BreakWeekChart: View {
+    let days: [WeekSummaryDay]
+
+    private var maxMinutes: Int {
+        max(1, days.map { breakMinutes(for: $0) }.max() ?? 0)
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 9) {
+            ForEach(days) { day in
+                VStack(spacing: 6) {
+                    ZStack(alignment: .bottom) {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color(nsColor: .systemOrange).opacity(0.16))
+
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(Color(nsColor: .systemOrange).opacity(breakMinutes(for: day) == 0 ? 0.18 : 0.82))
+                            .frame(height: max(5, 82 * CGFloat(breakMinutes(for: day)) / CGFloat(maxMinutes)))
+
+                        if day.breaks > 0 {
+                            Text("\(day.breaks)")
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                                .padding(.bottom, 5)
+                        }
+                    }
+                    .frame(width: 24, height: 82)
+
+                    Text(StatisticsDateFormatter.weekday.string(from: day.date))
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity)
+                .help("\(day.breaks) breaks, \(StatisticsDurationFormatter.string(from: day.breakDuration))")
+            }
         }
-        .frame(width: 52, alignment: .trailing)
+        .frame(height: 108)
+    }
+
+    private func breakMinutes(for day: WeekSummaryDay) -> Int {
+        Int(ceil(day.breakDuration / 60))
     }
 }
 
