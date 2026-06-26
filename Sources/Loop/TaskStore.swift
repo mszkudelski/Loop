@@ -159,8 +159,12 @@ final class TaskStore: ObservableObject {
     }
 
     var isOnBreak: Bool {
-        guard let breakUntil else { return false }
-        return breakUntil > currentDate
+        breakStartedAt != nil
+    }
+
+    var isBreakTimeUp: Bool {
+        guard isOnBreak, let breakUntil else { return false }
+        return breakUntil <= currentDate
     }
 
     var breakRemainingSeconds: Int {
@@ -170,6 +174,9 @@ final class TaskStore: ObservableObject {
 
     var breakTimerText: String? {
         guard isOnBreak else { return nil }
+        if isBreakTimeUp {
+            return "Break done"
+        }
         let minutes = max(0, Int(ceil(Double(breakRemainingSeconds) / 60.0)))
         return "Break \(minutes)m"
     }
@@ -745,6 +752,11 @@ final class TaskStore: ObservableObject {
     }
 
     func startBreak() {
+        guard !isOnBreak else {
+            endBreak()
+            return
+        }
+
         let now = Date()
         breakShouldFocusPriorityAfterBreak = completeFocusedTaskForBreak()
         breakStartedAt = now
@@ -1210,12 +1222,6 @@ final class TaskStore: ObservableObject {
 
     private func tickCurrentDate() {
         currentDate = Date()
-        finishExpiredBreakIfNeeded()
-    }
-
-    private func finishExpiredBreakIfNeeded() {
-        guard let breakUntil, breakUntil <= currentDate else { return }
-        endBreak()
     }
 
     private func normalizedIterationTimerMinutes(_ minutes: Int?) -> Int? {
@@ -1270,9 +1276,7 @@ final class TaskStore: ObservableObject {
         defer {
             isLoading = false
             currentDate = Date()
-            if breakUntil.map({ $0 <= currentDate }) == true {
-                endBreak()
-            } else {
+            if !isOnBreak {
                 ensureFocusedTask()
             }
             save()

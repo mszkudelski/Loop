@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var focusBannerDismissWorkItem: DispatchWorkItem?
     private var timerExpirationContext: TimerExpirationContext?
     private var nextTimerExpirationBannerAt: Date?
+    private var breakExpirationContext: BreakExpirationContext?
     private var quickAddWindow: NSPanel?
     private var quickAddDraft = ""
 
@@ -138,7 +139,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerBreakHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.startBreak) { [weak self] in
-            self?.store.startBreak()
+            guard let self else { return }
+            if self.store.isOnBreak {
+                self.store.endBreak()
+            } else {
+                self.store.startBreak()
+            }
         }
     }
 
@@ -167,6 +173,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     self?.updateStatusItemTitle()
                     self?.evaluateTimerExpirationBanner()
+                    self?.evaluateBreakExpirationBanner()
                 }
             }
             .store(in: &cancellables)
@@ -379,6 +386,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 title: "Time is up",
                 subtitle: task.title,
                 systemImage: "timer"
+            ),
+            onClick: {}
+        )
+    }
+
+    private func evaluateBreakExpirationBanner() {
+        guard
+            store.isOnBreak,
+            store.isBreakTimeUp,
+            let breakStartedAt = store.breakStartedAt,
+            let breakUntil = store.breakUntil
+        else {
+            breakExpirationContext = nil
+            return
+        }
+
+        let context = BreakExpirationContext(startedAt: breakStartedAt, until: breakUntil)
+        guard breakExpirationContext != context else { return }
+
+        breakExpirationContext = context
+        showBreakExpiredBanner()
+    }
+
+    private func showBreakExpiredBanner() {
+        showBanner(
+            state: FocusBannerState(
+                title: "Break is over",
+                subtitle: "End break when you are ready",
+                systemImage: "cup.and.saucer.fill"
             ),
             onClick: {}
         )
@@ -630,6 +666,11 @@ private extension NSView {
 private struct TimerExpirationContext: Equatable {
     let taskID: UUID
     let startedAt: Date
+}
+
+private struct BreakExpirationContext: Equatable {
+    let startedAt: Date
+    let until: Date
 }
 
 private struct FocusBannerState {

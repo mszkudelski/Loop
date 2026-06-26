@@ -201,6 +201,11 @@ private struct BreakOverlayView: View {
                 Text(remainingText)
                     .font(.system(.title2, design: .rounded).weight(.semibold))
                     .monospacedDigit()
+                if store.isBreakTimeUp {
+                    Text("Time is up")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Button {
@@ -215,6 +220,7 @@ private struct BreakOverlayView: View {
     }
 
     private var remainingText: String {
+        guard !store.isBreakTimeUp else { return "Done" }
         let seconds = store.breakRemainingSeconds
         let minutes = seconds / 60
         let remainder = seconds % 60
