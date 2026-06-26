@@ -408,8 +408,7 @@ final class TaskStore: ObservableObject {
         linkedApp: LinkedApp? = nil,
         cadence: LoopCadence = .everyLoop,
         iterationTimerMinutes: Int? = nil,
-        addToIteration: Bool = true,
-        useDefaultIterationTimer: Bool = true
+        addToIteration: Bool = true
     ) {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedTitle.isEmpty else { return }
@@ -420,8 +419,7 @@ final class TaskStore: ObservableObject {
             isBacklog: !addToIteration,
             sortOrder: nextSortOrder(),
             createdLoop: addToIteration ? loopNumber : nil,
-            iterationTimerMinutes: normalizedIterationTimerMinutes(iterationTimerMinutes)
-                ?? (useDefaultIterationTimer ? defaultIterationTimerMinutesOrNil : nil)
+            iterationTimerMinutes: normalizedIterationTimerMinutes(iterationTimerMinutes) ?? defaultIterationTimerMinutesOrNil
         ))
         ensureFocusedTask()
     }

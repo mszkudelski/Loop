@@ -47,8 +47,7 @@ struct LoopPanelView: View {
                     linkedApp: newTask.linkedApp,
                     cadence: newTask.cadence,
                     iterationTimerMinutes: newTask.iterationTimerMinutes,
-                    addToIteration: !newTask.isBacklog,
-                    useDefaultIterationTimer: false
+                    addToIteration: !newTask.isBacklog
                 )
             }
         }
