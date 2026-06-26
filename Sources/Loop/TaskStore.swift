@@ -1050,7 +1050,9 @@ final class TaskStore: ObservableObject {
         }
         guard !tasks[index].doneThisLoop, !tasks[index].finished, !tasks[index].isBacklog else { return }
         guard resetExisting || tasks[index].iterationTimerStartedLoop != loopNumber || tasks[index].iterationTimerStartedAt == nil else { return }
-        tasks[index].iterationTimerStartedAt = Date()
+        let now = Date()
+        currentDate = now
+        tasks[index].iterationTimerStartedAt = now
         tasks[index].iterationTimerStartedLoop = loopNumber
     }
 
