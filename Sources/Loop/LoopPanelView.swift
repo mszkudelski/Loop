@@ -738,6 +738,14 @@ private struct TaskRow: View {
                                 Label(preset.title, systemImage: preset.systemImage)
                             }
                         }
+
+                        Divider()
+
+                        Button {
+                            store.moveToBacklog(task)
+                        } label: {
+                            Label("Move to backlog", systemImage: "tray.and.arrow.down")
+                        }
                     } label: {
                         Label("Snooze for...", systemImage: "clock.badge.questionmark")
                     }
@@ -819,8 +827,7 @@ private struct SnoozePreset: Identifiable {
         SnoozePreset(title: "15 minutes", minutes: 15, systemImage: "clock"),
         SnoozePreset(title: "1 hour", minutes: 60, systemImage: "clock"),
         SnoozePreset(title: "2 hours", minutes: 120, systemImage: "clock"),
-        SnoozePreset(title: "Tomorrow", minutes: 24 * 60, systemImage: "sunrise"),
-        SnoozePreset(title: "Next week", minutes: 7 * 24 * 60, systemImage: "calendar")
+        SnoozePreset(title: "4 hours", minutes: 240, systemImage: "clock")
     ]
 }
 
