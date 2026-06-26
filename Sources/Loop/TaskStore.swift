@@ -59,6 +59,9 @@ final class TaskStore: ObservableObject {
     @Published private(set) var doneShortcut: KeyboardShortcutSetting = .defaultDoneShortcut
     @Published private(set) var quickAddShortcut: KeyboardShortcutSetting = .defaultQuickAddShortcut
     @Published private(set) var breakShortcut: KeyboardShortcutSetting = .defaultBreakShortcut
+    @Published private(set) var breakDurationMinutes = 5 {
+        didSet { save() }
+    }
 
     @Published private(set) var focusedTaskID: UUID? {
         didSet { save() }
@@ -94,7 +97,6 @@ final class TaskStore: ObservableObject {
     var onBreakShortcutChange: ((KeyboardShortcutSetting) -> Void)?
 
     private let defaultsKey = "Loop.store.v1"
-    private let defaultBreakDuration: TimeInterval = 5 * 60
     private let fastLoopCompletionThreshold: TimeInterval = 2 * 60
     private let fastLoopSuggestionWindow: TimeInterval = 10 * 60
     private let quickCompletionThreshold: TimeInterval = 20
@@ -179,6 +181,10 @@ final class TaskStore: ObservableObject {
         }
         let minutes = max(0, Int(ceil(Double(breakRemainingSeconds) / 60.0)))
         return "Break \(minutes)m"
+    }
+
+    var breakDurationSeconds: TimeInterval {
+        TimeInterval(breakDurationMinutes * 60)
     }
 
     var doneTasks: [LoopTask] {
@@ -609,6 +615,14 @@ final class TaskStore: ObservableObject {
         autoOpenFocusedTaskApp = isEnabled
     }
 
+    func setBreakDurationMinutes(_ minutes: Int) {
+        let clampedMinutes = min(max(minutes, 1), 120)
+        breakDurationMinutes = clampedMinutes
+        if isOnBreak, let breakStartedAt {
+            breakUntil = breakStartedAt.addingTimeInterval(TimeInterval(clampedMinutes * 60))
+        }
+    }
+
     func moveCurrentLoopTask(draggedTaskID: UUID, to targetTaskID: UUID) {
         guard draggedTaskID != targetTaskID else { return }
 
@@ -760,7 +774,7 @@ final class TaskStore: ObservableObject {
         let now = Date()
         breakShouldFocusPriorityAfterBreak = completeFocusedTaskForBreak()
         breakStartedAt = now
-        breakUntil = now.addingTimeInterval(defaultBreakDuration)
+        breakUntil = now.addingTimeInterval(breakDurationSeconds)
         focusedTaskID = nil
         lastAutoOpenedFocusedTaskID = nil
         currentDate = now
@@ -1255,6 +1269,7 @@ final class TaskStore: ObservableObject {
             breakStartedAt: breakStartedAt,
             breakUntil: breakUntil,
             breakShouldFocusPriorityAfterBreak: breakShouldFocusPriorityAfterBreak,
+            breakDurationMinutes: breakDurationMinutes,
             shortcut: shortcut.normalized,
             doneShortcut: doneShortcut.normalized,
             quickAddShortcut: quickAddShortcut.normalized,
@@ -1290,6 +1305,7 @@ final class TaskStore: ObservableObject {
         breakStartedAt = snapshot.breakStartedAt
         breakUntil = snapshot.breakUntil
         breakShouldFocusPriorityAfterBreak = snapshot.breakShouldFocusPriorityAfterBreak
+        breakDurationMinutes = min(max(snapshot.breakDurationMinutes, 1), 120)
         doneShortcut = snapshot.doneShortcut.normalized
         quickAddShortcut = snapshot.quickAddShortcut.normalized
         breakShortcut = snapshot.breakShortcut.normalized
@@ -1329,6 +1345,7 @@ private struct StoreSnapshot: Codable {
     var breakStartedAt: Date?
     var breakUntil: Date?
     var breakShouldFocusPriorityAfterBreak: Bool
+    var breakDurationMinutes: Int
     var shortcut: KeyboardShortcutSetting
     var doneShortcut: KeyboardShortcutSetting
     var quickAddShortcut: KeyboardShortcutSetting
@@ -1344,6 +1361,7 @@ private struct StoreSnapshot: Codable {
         case breakStartedAt
         case breakUntil
         case breakShouldFocusPriorityAfterBreak
+        case breakDurationMinutes
         case shortcut
         case doneShortcut
         case quickAddShortcut
@@ -1360,6 +1378,7 @@ private struct StoreSnapshot: Codable {
         breakStartedAt: Date?,
         breakUntil: Date?,
         breakShouldFocusPriorityAfterBreak: Bool,
+        breakDurationMinutes: Int,
         shortcut: KeyboardShortcutSetting,
         doneShortcut: KeyboardShortcutSetting,
         quickAddShortcut: KeyboardShortcutSetting,
@@ -1374,6 +1393,7 @@ private struct StoreSnapshot: Codable {
         self.breakStartedAt = breakStartedAt
         self.breakUntil = breakUntil
         self.breakShouldFocusPriorityAfterBreak = breakShouldFocusPriorityAfterBreak
+        self.breakDurationMinutes = breakDurationMinutes
         self.shortcut = shortcut
         self.doneShortcut = doneShortcut
         self.quickAddShortcut = quickAddShortcut
@@ -1391,6 +1411,7 @@ private struct StoreSnapshot: Codable {
         breakStartedAt = try container.decodeIfPresent(Date.self, forKey: .breakStartedAt)
         breakUntil = try container.decodeIfPresent(Date.self, forKey: .breakUntil)
         breakShouldFocusPriorityAfterBreak = try container.decodeIfPresent(Bool.self, forKey: .breakShouldFocusPriorityAfterBreak) ?? false
+        breakDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .breakDurationMinutes) ?? 5
         shortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .shortcut) ?? .defaultShortcut
         doneShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .doneShortcut) ?? .defaultDoneShortcut
         quickAddShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .quickAddShortcut) ?? .defaultQuickAddShortcut

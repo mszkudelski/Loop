@@ -822,7 +822,7 @@ private struct BacklogTaskRow: View {
 
 private struct SettingsPanelView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedSection: SettingsSection = .stats
+    @State private var selectedSection: SettingsSection = .general
 
     var body: some View {
         VStack(spacing: 0) {
@@ -837,7 +837,7 @@ private struct SettingsPanelView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 220)
+                .frame(width: 320)
 
                 Button {
                     dismiss()
@@ -854,28 +854,64 @@ private struct SettingsPanelView: View {
             Divider()
 
             switch selectedSection {
+            case .general:
+                GeneralSettingsView()
             case .stats:
                 StatisticsView()
             case .shortcuts:
                 ShortcutSettingsView()
+            case .breaks:
+                BreakSettingsView()
             }
         }
-        .frame(width: 500, height: 560)
+        .frame(width: 560, height: 560)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
+    case general
     case stats
     case shortcuts
+    case breaks
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .general: "General"
         case .stats: "Stats"
         case .shortcuts: "Shortcuts"
+        case .breaks: "Break"
         }
+    }
+}
+
+private struct GeneralSettingsView: View {
+    @EnvironmentObject private var store: TaskStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("General")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                Toggle("Auto-open focused app", isOn: Binding(
+                    get: {
+                        store.autoOpenFocusedTaskApp
+                    },
+                    set: { isEnabled in
+                        store.setAutoOpenFocusedTaskApp(isEnabled)
+                    }
+                ))
+                .toggleStyle(.checkbox)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -1364,29 +1400,78 @@ private struct ShortcutSettingsView: View {
                     shortcut: store.quickAddShortcut,
                     onRecord: store.applyQuickAddShortcut
                 )
-
-                shortcutRecorder(
-                    title: "Start break",
-                    shortcut: store.breakShortcut,
-                    onRecord: store.applyBreakShortcut
-                )
-
-                Divider()
-
-                Toggle("Auto-open focused app", isOn: Binding(
-                    get: {
-                        store.autoOpenFocusedTaskApp
-                    },
-                    set: { isEnabled in
-                        store.setAutoOpenFocusedTaskApp(isEnabled)
-                    }
-                ))
-                .toggleStyle(.checkbox)
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func shortcutRecorder(
+        title: String,
+        shortcut: KeyboardShortcutSetting,
+        onRecord: @escaping (KeyboardShortcutSetting) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+
+            ShortcutRecorderView(shortcut: shortcut, onRecord: onRecord)
+                .frame(width: 210, height: 32)
+        }
+    }
+}
+
+private struct BreakSettingsView: View {
+    @EnvironmentObject private var store: TaskStore
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Break")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Duration")
+                        .font(.callout.weight(.semibold))
+
+                    Stepper(value: breakDurationBinding, in: 1...120, step: 1) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "timer")
+                                .foregroundStyle(.secondary)
+                            Text("\(store.breakDurationMinutes) minutes")
+                                .monospacedDigit()
+                        }
+                    }
+                    .frame(width: 260, alignment: .leading)
+                }
+
+                Divider()
+
+                shortcutRecorder(
+                    title: "Shortcut",
+                    shortcut: store.breakShortcut,
+                    onRecord: store.applyBreakShortcut
+                )
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var breakDurationBinding: Binding<Int> {
+        Binding(
+            get: {
+                store.breakDurationMinutes
+            },
+            set: { minutes in
+                store.setBreakDurationMinutes(minutes)
+            }
+        )
     }
 
     @ViewBuilder
