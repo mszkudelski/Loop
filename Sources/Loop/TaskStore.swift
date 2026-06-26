@@ -112,11 +112,7 @@ final class TaskStore: ObservableObject {
             return focusedTaskID
         }
 
-        let firstReadyPriorityTaskID = currentTasks
-            .first { !$0.doneThisLoop && $0.isPriority && !isPriorityDeferred($0) }?
-            .id
-
-        return firstReadyPriorityTaskID ?? firstUndoneCurrentTaskID()
+        return firstUndoneCurrentTaskID()
     }
 
     var focusedTaskTitle: String? {
@@ -946,7 +942,7 @@ final class TaskStore: ObservableObject {
     }
 
     private func firstUndoneCurrentTaskID() -> UUID? {
-        currentLoopTasks.first { !$0.doneThisLoop }?.id
+        ordered(tasks.filter { !$0.isBacklog && !$0.finished && !$0.doneThisLoop && isDue($0) && !isSnoozed($0) }).first?.id
     }
 
     @discardableResult
