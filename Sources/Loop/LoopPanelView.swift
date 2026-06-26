@@ -442,11 +442,6 @@ private struct LoopTasksView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text("Now")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-
                     Spacer()
 
                     HStack(spacing: 12) {
