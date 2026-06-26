@@ -526,7 +526,6 @@ final class TaskStore: ObservableObject {
             tasks[index].priorityDeferredLoop = nil
         } else {
             clearCurrentIterationPriority(except: task.id)
-            focusedTaskID = nil
         }
         ensureFocusedTask()
     }
