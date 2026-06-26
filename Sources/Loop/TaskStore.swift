@@ -382,7 +382,8 @@ final class TaskStore: ObservableObject {
         updatedTask.updatedAt = Date()
         tasks[index] = updatedTask
         if !previousTask.doneThisLoop && updatedTask.doneThisLoop && !updatedTask.finished {
-            if !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: true) {
+            if !focusPriorityAfterRegularTaskCompletion(openNextFocusedApp: true),
+               !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: true) {
                 ensureFocusedTask(openLinkedAppIfChanged: true)
             }
         } else if wasUndoneCurrentLoopTask && !previousTask.finished && updatedTask.finished {
@@ -415,7 +416,8 @@ final class TaskStore: ObservableObject {
         }
         tasks[index].updatedAt = Date()
         if tasks[index].doneThisLoop {
-            if !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: true) {
+            if !focusPriorityAfterRegularTaskCompletion(openNextFocusedApp: true),
+               !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: true) {
                 ensureFocusedTask(openLinkedAppIfChanged: true)
             }
         } else {
@@ -942,7 +944,14 @@ final class TaskStore: ObservableObject {
     }
 
     private func firstUndoneCurrentTaskID() -> UUID? {
-        ordered(tasks.filter { !$0.isBacklog && !$0.finished && !$0.doneThisLoop && isDue($0) && !isSnoozed($0) }).first?.id
+        ordered(tasks.filter {
+            !$0.isBacklog
+                && !$0.finished
+                && !$0.doneThisLoop
+                && isDue($0)
+                && !isSnoozed($0)
+                && !isPriorityDeferred($0)
+        }).first?.id
     }
 
     @discardableResult
@@ -961,7 +970,8 @@ final class TaskStore: ObservableObject {
         recordQuickCompletionIfNeeded(for: &tasks[index])
         clearPriorityDeferrals()
         tasks[index].updatedAt = Date()
-        if !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: openNextFocusedApp) {
+        if !focusPriorityAfterRegularTaskCompletion(openNextFocusedApp: openNextFocusedApp),
+           !advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: openNextFocusedApp) {
             ensureFocusedTask(openLinkedAppIfChanged: openNextFocusedApp)
         }
         return true
@@ -979,6 +989,9 @@ final class TaskStore: ObservableObject {
         tasks[index].priorityDeferredLoop = loopNumber
         if focusedTaskID == tasks[index].id {
             focusedTaskID = nil
+        }
+        if advanceLoopIfCurrentLoopIsDone(openNextFocusedApp: openNextFocusedApp) {
+            return
         }
         ensureFocusedTask(openLinkedAppIfChanged: openNextFocusedApp)
     }
@@ -1001,6 +1014,21 @@ final class TaskStore: ObservableObject {
             tasks[index].priorityDeferredLoop = nil
             tasks[index].updatedAt = Date()
         }
+    }
+
+    private func focusPriorityAfterRegularTaskCompletion(openNextFocusedApp: Bool) -> Bool {
+        guard let priorityTask = currentLoopTasks.first(where: { task in
+            task.isPriority
+                && !task.doneThisLoop
+                && !task.finished
+                && !task.isBacklog
+                && !isPriorityDeferred(task)
+        }) else {
+            return false
+        }
+
+        setFocusedTaskID(priorityTask.id, openLinkedAppIfChanged: openNextFocusedApp)
+        return true
     }
 
     private func ensureFocusedTask(openLinkedAppIfChanged: Bool = false) {
