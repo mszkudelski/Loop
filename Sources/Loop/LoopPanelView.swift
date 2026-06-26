@@ -643,13 +643,7 @@ private struct TaskRow: View {
                 .loopHelp(task.isBacklog ? "Backlog" : (task.doneThisLoop ? "Reopen" : "Done"))
 
                 Button {
-                    if !task.isBacklog && !task.doneThisLoop {
-                        store.focus(task)
-                    } else if task.linkedApp == nil {
-                        onEdit()
-                    } else {
-                        store.openLinkedApp(for: task)
-                    }
+                    onEdit()
                 } label: {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 6) {
@@ -1753,22 +1747,40 @@ private struct TaskEditorView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(isNew ? "New Task" : "Edit Task")
-                .font(.title3.weight(.semibold))
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text(isNew ? "New Task" : "Task Details")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+            }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Title")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            taskEditorSection("Title") {
                 TextField("Task name", text: $draft.title)
                     .textFieldStyle(.roundedBorder)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Application")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+            taskEditorSection("Application") {
+                HStack(spacing: 8) {
+                    Label(draft.linkedApp?.name ?? "No app selected", systemImage: "app.dashed")
+                        .lineLimit(1)
+                        .foregroundStyle(draft.linkedApp == nil ? .secondary : .primary)
+
+                    Spacer()
+
+                    if draft.linkedApp != nil {
+                        Button {
+                            draft.linkedApp = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .loopHelp("Clear selected app")
+                    }
+
+                    Button("Choose") {
+                        chooseApplication()
+                    }
+                }
 
                 LazyVGrid(columns: popularApplicationColumns, spacing: 6) {
                     ForEach(PopularApplication.allCases) { app in
@@ -1783,31 +1795,9 @@ private struct TaskEditorView: View {
                         .controlSize(.small)
                     }
                 }
-
-                HStack {
-                    Text(draft.linkedApp?.name ?? "No app selected")
-                        .lineLimit(1)
-                    Spacer()
-                    Button("Choose") {
-                        chooseApplication()
-                    }
-                    if draft.linkedApp != nil {
-                        Button {
-                            draft.linkedApp = nil
-                        } label: {
-                            Image(systemName: "xmark")
-                        }
-                        .buttonStyle(.borderless)
-                        .loopHelp("Clear selected app")
-                    }
-                }
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Cadence")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
+            taskEditorSection("Cadence") {
                 Picker("Cadence", selection: $draft.cadence) {
                     ForEach(LoopCadence.allCases) { cadence in
                         Text(cadence.compactTitle).tag(cadence)
@@ -1816,7 +1806,7 @@ private struct TaskEditorView: View {
                 .pickerStyle(.segmented)
             }
 
-            VStack(alignment: .leading, spacing: 8) {
+            taskEditorSection("Iteration timer") {
                 Toggle("Iteration timer", isOn: iterationTimerEnabledBinding)
                     .toggleStyle(.checkbox)
 
@@ -1830,19 +1820,6 @@ private struct TaskEditorView: View {
                         }
                     }
                 }
-            }
-
-            Toggle("Backlog", isOn: $draft.isBacklog)
-                .toggleStyle(.checkbox)
-
-            if !isNew {
-                if !draft.isBacklog && !draft.isPriority {
-                    Toggle("Done this iteration", isOn: $draft.doneThisLoop)
-                        .toggleStyle(.checkbox)
-                }
-
-                Toggle("Finished", isOn: $draft.finished)
-                    .toggleStyle(.checkbox)
             }
 
             HStack {
@@ -1870,6 +1847,20 @@ private struct TaskEditorView: View {
     private func chooseApplication() {
         if let linkedApp = onChooseApplication() {
             draft.linkedApp = linkedApp
+        }
+    }
+
+    private func taskEditorSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            content()
         }
     }
 
