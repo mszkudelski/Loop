@@ -430,7 +430,7 @@ private struct TaskRow: View {
                             }
 
                             if let appName = task.linkedApp?.name {
-                                Label(appName, systemImage: "app")
+                                Text(appName)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
@@ -715,7 +715,7 @@ private struct BacklogTaskRow: View {
                     }
 
                     if let appName = task.linkedApp?.name {
-                        Label(appName, systemImage: "app")
+                        Text(appName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
