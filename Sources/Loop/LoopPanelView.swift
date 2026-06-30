@@ -164,6 +164,7 @@ struct LoopPanelView: View {
                     linkedApp: newTask.linkedApp,
                     cadence: newTask.cadence,
                     iterationTimerMinutes: newTask.iterationTimerMinutes,
+                    scheduledFor: newTask.scheduledFor,
                     addToIteration: !newTask.isBacklog
                 )
             }
@@ -175,6 +176,15 @@ struct LoopPanelView: View {
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanelView()
                 .environmentObject(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .loopShouldEditTask)) { notification in
+            guard
+                let taskID = notification.object as? UUID,
+                let task = store.tasks.first(where: { $0.id == taskID })
+            else {
+                return
+            }
+            editingTask = task
         }
     }
 
@@ -658,9 +668,15 @@ private struct TaskRow: View {
                         }
 
                         HStack(spacing: 8) {
-                            CadenceBadge(cadence: task.cadence)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            if let scheduledFor = task.scheduledFor {
+                                TaskScheduleBadge(scheduledFor: scheduledFor)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                CadenceBadge(cadence: task.cadence)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
 
                             if let iterationTimerMinutes = task.iterationTimerMinutes {
                                 TimerBadge(
@@ -719,6 +735,12 @@ private struct TaskRow: View {
                     } label: {
                         Label("Unsnooze", systemImage: "clock.arrow.circlepath")
                     }
+                } else if !task.isBacklog, task.scheduledFor.map({ $0 > store.currentDate }) == true {
+                    Button {
+                        store.clearSchedule(for: task)
+                    } label: {
+                        Label("Add Now", systemImage: "calendar.badge.clock")
+                    }
                 } else if !task.isBacklog {
                     Button {
                         store.snooze(task, minutes: 30)
@@ -756,7 +778,7 @@ private struct TaskRow: View {
                 Button {
                     onEdit()
                 } label: {
-                    Label("Edit", systemImage: "pencil")
+                    Label(task.scheduledFor == nil ? "Edit" : "Edit Routine", systemImage: "pencil")
                 }
 
                 Button {
@@ -816,7 +838,7 @@ private struct TaskRow: View {
 
 }
 
-private struct SnoozePreset: Identifiable {
+struct SnoozePreset: Identifiable {
     let title: String
     let minutes: Int
     let systemImage: String
@@ -862,6 +884,42 @@ private struct TimerBadge: View {
         let remainingMinutes = max(0, Int(ceil(Double(remainingSeconds) / 60.0)))
         return "\(remainingMinutes)m"
     }
+}
+
+private struct TaskScheduleBadge: View {
+    let scheduledFor: Date
+
+    var body: some View {
+        Label(scheduleText, systemImage: "calendar.badge.clock")
+            .lineLimit(1)
+    }
+
+    private var scheduleText: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(scheduledFor) {
+            return "Today \(ScheduleFormatters.time.string(from: scheduledFor))"
+        }
+        if calendar.isDateInTomorrow(scheduledFor) {
+            return "Tomorrow \(ScheduleFormatters.time.string(from: scheduledFor))"
+        }
+        return ScheduleFormatters.shortDateTime.string(from: scheduledFor)
+    }
+}
+
+private enum ScheduleFormatters {
+    static let time: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    static let shortDateTime: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 private struct LoopTaskDropDelegate: DropDelegate {
@@ -982,9 +1040,15 @@ private struct BacklogTaskRow: View {
                 }
 
                 HStack(spacing: 8) {
-                    CadenceBadge(cadence: task.cadence)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if let scheduledFor = task.scheduledFor {
+                        TaskScheduleBadge(scheduledFor: scheduledFor)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        CadenceBadge(cadence: task.cadence)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     if let iterationTimerMinutes = task.iterationTimerMinutes {
                         TimerBadge(minutes: iterationTimerMinutes, remainingSeconds: nil)
@@ -1223,6 +1287,8 @@ private struct StatisticsView: View {
                     StatTile(title: "Finished", value: "\(finishedCount)", systemImage: "checkmark.seal")
                     StatTile(title: "Breaks", value: "\(breakCount)", systemImage: "cup.and.saucer")
                     StatTile(title: "Break time", value: breakDurationText, systemImage: "timer")
+                    StatTile(title: "Meetings", value: "\(meetingCount)", systemImage: "video")
+                    StatTile(title: "Meeting time", value: meetingDurationText, systemImage: "person.2.wave.2")
                     StatTile(
                         title: "Avg Iterations / Task",
                         value: averageText,
@@ -1313,6 +1379,27 @@ private struct StatisticsView: View {
         return StatisticsDurationFormatter.string(from: duration)
     }
 
+    private var meetingCount: Int {
+        switch scope {
+        case .day: store.meetingCount(on: selectedDate)
+        case .week: store.meetingCount(in: selectedWeekInterval)
+        case .total: store.meetingCountTotal
+        }
+    }
+
+    private var meetingDurationText: String {
+        let duration: TimeInterval
+        switch scope {
+        case .day:
+            duration = store.meetingDuration(on: selectedDate)
+        case .week:
+            duration = store.meetingDuration(in: selectedWeekInterval)
+        case .total:
+            duration = store.meetingDurationTotal
+        }
+        return StatisticsDurationFormatter.string(from: duration)
+    }
+
     private var finishedStats: [TaskCompletionStat] {
         switch scope {
         case .day: store.completedTaskStats(on: selectedDate)
@@ -1398,7 +1485,9 @@ private struct StatisticsView: View {
                 iterations: store.loopsCompleted(on: day),
                 finished: store.tasksFinished(on: day).count,
                 breaks: store.breakCount(on: day),
-                breakDuration: store.breakDuration(on: day)
+                breakDuration: store.breakDuration(on: day),
+                meetings: store.meetingCount(on: day),
+                meetingDuration: store.meetingDuration(on: day)
             )
         }
     }
@@ -1432,6 +1521,8 @@ private struct WeekSummaryDay: Identifiable, Equatable {
     var finished: Int
     var breaks: Int
     var breakDuration: TimeInterval
+    var meetings: Int
+    var meetingDuration: TimeInterval
 }
 
 private struct WeekSummaryView: View {
@@ -1462,6 +1553,16 @@ private struct WeekSummaryView: View {
                 ]
             ) {
                 BreakWeekChart(days: days)
+            }
+
+            WeekChartCard(
+                title: "Meetings",
+                legend: [
+                    WeekChartLegendItem(title: "Time", color: Color(nsColor: .systemBlue)),
+                    WeekChartLegendItem(title: "Count", color: .secondary)
+                ]
+            ) {
+                MeetingWeekChart(days: days)
             }
         }
     }
@@ -1596,6 +1697,57 @@ private struct BreakWeekChart: View {
 
     private func breakMinutes(for day: WeekSummaryDay) -> Int {
         Int(ceil(day.breakDuration / 60))
+    }
+
+    private func dayLabel(for day: WeekSummaryDay) -> some View {
+        Text(StatisticsDateFormatter.weekday.string(from: day.date))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, alignment: .leading)
+    }
+}
+
+private struct MeetingWeekChart: View {
+    let days: [WeekSummaryDay]
+
+    private var maxMinutes: Int {
+        max(1, days.map { meetingMinutes(for: $0) }.max() ?? 0)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(days) { day in
+                HStack(spacing: 10) {
+                    dayLabel(for: day)
+
+                    ProgressTrack(
+                        value: Double(meetingMinutes(for: day)),
+                        maxValue: Double(maxMinutes),
+                        color: Color(nsColor: .systemBlue)
+                    )
+
+                    Text(StatisticsDurationFormatter.string(from: day.meetingDuration))
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .frame(width: 52, alignment: .trailing)
+
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color.secondary)
+                            .frame(width: 7, height: 7)
+                        Text("\(day.meetings)")
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .frame(width: 34, alignment: .trailing)
+                }
+                .loopHelp("\(day.meetings) meetings, \(StatisticsDurationFormatter.string(from: day.meetingDuration))")
+            }
+        }
+    }
+
+    private func meetingMinutes(for day: WeekSummaryDay) -> Int {
+        Int(ceil(day.meetingDuration / 60))
     }
 
     private func dayLabel(for day: WeekSummaryDay) -> some View {
@@ -1827,14 +1979,49 @@ private struct TaskEditorView: View {
                 }
             }
 
-            taskEditorSection("Cadence") {
-                Picker("", selection: $draft.cadence) {
-                    ForEach(LoopCadence.allCases) { cadence in
-                        Text(cadence.compactTitle).tag(cadence)
+            taskEditorSection("Schedule") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Scheduled", isOn: scheduledTaskBinding)
+                        .toggleStyle(.checkbox)
+
+                    if draft.scheduledFor != nil {
+                        DatePicker(
+                            "Time",
+                            selection: scheduledForBinding,
+                            displayedComponents: [.date, .hourAndMinute]
+                        )
+                        .labelsHidden()
+
+                        HStack(spacing: 8) {
+                            Button("Tomorrow 09:00") {
+                                draft.scheduledFor = scheduledDate(daysFromToday: 1, hour: 9, minute: 0)
+                            }
+                            .controlSize(.small)
+
+                            Button("Today 10:00") {
+                                draft.scheduledFor = scheduledDate(daysFromToday: 0, hour: 10, minute: 0)
+                            }
+                            .controlSize(.small)
+
+                            Button("Today 14:00") {
+                                draft.scheduledFor = scheduledDate(daysFromToday: 0, hour: 14, minute: 0)
+                            }
+                            .controlSize(.small)
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+            }
+
+            if draft.scheduledFor == nil {
+                taskEditorSection("Cadence") {
+                    Picker("", selection: $draft.cadence) {
+                        ForEach(LoopCadence.allCases) { cadence in
+                            Text(cadence.compactTitle).tag(cadence)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
             }
 
             taskEditorSection("Iteration timer") {
@@ -1902,6 +2089,36 @@ private struct TaskEditorView: View {
         return "\(minutes) \(minutes == 1 ? "minute" : "minutes")"
     }
 
+    private var scheduledTaskBinding: Binding<Bool> {
+        Binding(
+            get: {
+                draft.scheduledFor != nil
+            },
+            set: { isScheduled in
+                if isScheduled {
+                    draft.scheduledFor = draft.scheduledFor ?? scheduledDate(daysFromToday: 1, hour: 9, minute: 0)
+                    draft.doneThisLoop = false
+                    draft.lastCompletedLoop = nil
+                } else {
+                    draft.scheduledFor = nil
+                }
+            }
+        )
+    }
+
+    private var scheduledForBinding: Binding<Date> {
+        Binding(
+            get: {
+                draft.scheduledFor ?? scheduledDate(daysFromToday: 1, hour: 9, minute: 0)
+            },
+            set: { date in
+                draft.scheduledFor = date
+                draft.doneThisLoop = false
+                draft.lastCompletedLoop = nil
+            }
+        )
+    }
+
     private var iterationTimerMinutesBinding: Binding<Int> {
         Binding(
             get: {
@@ -1921,6 +2138,13 @@ private struct TaskEditorView: View {
             GridItem(.flexible(), spacing: 6),
             GridItem(.flexible(), spacing: 6)
         ]
+    }
+
+    private func scheduledDate(daysFromToday: Int, hour: Int, minute: Int) -> Date {
+        let calendar = Calendar.current
+        let startOfDay = calendar.startOfDay(for: Date())
+        let targetDay = calendar.date(byAdding: .day, value: daysFromToday, to: startOfDay) ?? startOfDay
+        return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: targetDay) ?? targetDay
     }
 }
 

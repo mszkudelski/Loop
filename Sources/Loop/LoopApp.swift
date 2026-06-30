@@ -24,6 +24,7 @@ private enum HotKeyIdentifier {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = TaskStore()
+    private let meetingMonitor = MeetingMonitor()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
     private var hotKeyManager: HotKeyManager?
@@ -45,14 +46,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureHotKey()
         configureNotifications()
         configureOutsideClickHandling()
+        configureMeetingMonitor()
         configureStatusTitleUpdates()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        store.endMeetingManually()
         NotificationCenter.default.removeObserver(self)
         if let globalMouseDownMonitor {
             NSEvent.removeMonitor(globalMouseDownMonitor)
         }
+        meetingMonitor.stop()
         dismissFocusBanner()
     }
 
@@ -166,6 +170,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func configureMeetingMonitor() {
+        meetingMonitor.onMeetingStateChange = { [weak self] isActive in
+            self?.store.setMeetingActive(isActive)
+        }
+    }
+
     private func configureStatusTitleUpdates() {
         store.objectWillChange
             .sink { [weak self] _ in
@@ -223,9 +233,151 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appNameItem.isEnabled = false
         menu.addItem(appNameItem)
         menu.addItem(.separator())
+        if store.isInMeeting {
+            let meetingItem = NSMenuItem(title: store.meetingTimerText ?? "In meeting", action: nil, keyEquivalent: "")
+            meetingItem.isEnabled = false
+            menu.addItem(meetingItem)
+            menu.addItem(NSMenuItem(title: "End meeting mode", action: #selector(endMeetingModeFromStatusMenu), keyEquivalent: ""))
+        } else {
+            menu.addItem(NSMenuItem(title: "Start meeting mode", action: #selector(startMeetingModeFromStatusMenu), keyEquivalent: ""))
+        }
+        menu.addItem(.separator())
+
+        addFocusedTaskItems(to: menu)
+
         menu.addItem(NSMenuItem(title: "Quit \(appDisplayName)", action: #selector(quitFromStatusMenu), keyEquivalent: "q"))
 
         menu.popUp(positioning: appNameItem, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    private func addFocusedTaskItems(to menu: NSMenu) {
+        guard let task = store.focusedTask else {
+            let noTaskItem = NSMenuItem(title: "No current task", action: nil, keyEquivalent: "")
+            noTaskItem.isEnabled = false
+            menu.addItem(noTaskItem)
+            menu.addItem(.separator())
+            return
+        }
+
+        let taskTitleItem = NSMenuItem(title: truncatedMenuBarTitle(task.title), action: nil, keyEquivalent: "")
+        taskTitleItem.isEnabled = false
+        menu.addItem(taskTitleItem)
+
+        if !task.doneThisLoop {
+            menu.addItem(taskMenuItem(title: "Done", action: #selector(markCurrentTaskDoneFromStatusMenu), imageName: "checkmark.circle"))
+        }
+
+        if store.isSnoozed(task) {
+            menu.addItem(taskMenuItem(title: "Unsnooze", action: #selector(unsnoozeCurrentTaskFromStatusMenu), imageName: "clock.arrow.circlepath"))
+        } else {
+            menu.addItem(taskMenuItem(
+                title: task.doneThisLoop ? "Snooze Next Iterations" : "Snooze 30 minutes",
+                action: #selector(snoozeCurrentTaskThirtyMinutesFromStatusMenu),
+                imageName: "clock"
+            ))
+
+            let snoozeMenu = NSMenu()
+            for preset in SnoozePreset.secondaryOptions {
+                let item = NSMenuItem(title: preset.title, action: #selector(snoozeCurrentTaskFromStatusMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = preset.minutes
+                item.image = menuImage(preset.systemImage)
+                snoozeMenu.addItem(item)
+            }
+            snoozeMenu.addItem(.separator())
+            snoozeMenu.addItem(taskMenuItem(title: "Move to Backlog", action: #selector(moveCurrentTaskToBacklogFromStatusMenu), imageName: "tray.and.arrow.down"))
+
+            let snoozeItem = NSMenuItem(title: "Snooze for...", action: nil, keyEquivalent: "")
+            snoozeItem.image = menuImage("clock.badge.questionmark")
+            snoozeItem.submenu = snoozeMenu
+            menu.addItem(snoozeItem)
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(taskMenuItem(title: "Edit", action: #selector(editCurrentTaskFromStatusMenu), imageName: "pencil"))
+        menu.addItem(taskMenuItem(
+            title: task.isPriority ? "Remove Priority" : "Mark Priority",
+            action: #selector(toggleCurrentTaskPriorityFromStatusMenu),
+            imageName: task.isPriority ? "star.slash" : "star"
+        ))
+        menu.addItem(taskMenuItem(title: "Move to Backlog", action: #selector(moveCurrentTaskToBacklogFromStatusMenu), imageName: "tray.and.arrow.down"))
+        menu.addItem(taskMenuItem(title: "Finish", action: #selector(finishCurrentTaskFromStatusMenu), imageName: "checkmark.seal"))
+        menu.addItem(taskMenuItem(title: "Delete", action: #selector(deleteCurrentTaskFromStatusMenu), imageName: "trash"))
+        menu.addItem(.separator())
+    }
+
+    private func taskMenuItem(title: String, action: Selector, imageName: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = menuImage(imageName)
+        return item
+    }
+
+    private func menuImage(_ systemName: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)
+        image?.isTemplate = true
+        return image
+    }
+
+    @objc private func startMeetingModeFromStatusMenu(_ sender: Any?) {
+        store.setMeetingActive(true)
+    }
+
+    @objc private func endMeetingModeFromStatusMenu(_ sender: Any?) {
+        meetingMonitor.suppressUntilInactive()
+        store.endMeetingManually()
+    }
+
+    @objc private func markCurrentTaskDoneFromStatusMenu(_ sender: Any?) {
+        if store.markFocusedTaskDone(openNextFocusedApp: true) {
+            showFocusBanner()
+        }
+    }
+
+    @objc private func snoozeCurrentTaskThirtyMinutesFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.snooze(task, minutes: 30)
+    }
+
+    @objc private func snoozeCurrentTaskFromStatusMenu(_ sender: NSMenuItem) {
+        guard
+            let minutes = sender.representedObject as? Int,
+            let task = store.focusedTask
+        else {
+            return
+        }
+        store.snooze(task, minutes: minutes)
+    }
+
+    @objc private func unsnoozeCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.unsnooze(task)
+    }
+
+    @objc private func editCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        showPopover()
+        NotificationCenter.default.post(name: .loopShouldEditTask, object: task.id)
+    }
+
+    @objc private func toggleCurrentTaskPriorityFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.togglePriority(task)
+    }
+
+    @objc private func moveCurrentTaskToBacklogFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.moveToBacklog(task)
+    }
+
+    @objc private func finishCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.finish(task)
+    }
+
+    @objc private func deleteCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.delete(task)
     }
 
     @objc private func quitFromStatusMenu(_ sender: Any?) {
@@ -272,10 +424,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItemTitle() {
         guard let button = statusItem?.button else { return }
-        let title = store.breakTimerText ?? menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
+        let title = store.meetingTimerText ?? store.breakTimerText ?? menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
         button.title = title
         button.imagePosition = title.isEmpty ? .imageOnly : .imageLeft
-        button.toolTip = store.breakTimerText ?? menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
+        button.toolTip = store.meetingTimerText ?? store.breakTimerText ?? menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
     }
 
     private func truncatedMenuBarTitle(_ title: String?) -> String {

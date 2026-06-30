@@ -24,6 +24,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
     var iterationTimerMinutes: Int?
     var iterationTimerStartedAt: Date?
     var iterationTimerStartedLoop: Int?
+    var scheduledFor: Date?
     var createdAt: Date
     var updatedAt: Date
 
@@ -51,6 +52,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         iterationTimerMinutes: Int? = nil,
         iterationTimerStartedAt: Date? = nil,
         iterationTimerStartedLoop: Int? = nil,
+        scheduledFor: Date? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -77,6 +79,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         self.iterationTimerMinutes = iterationTimerMinutes
         self.iterationTimerStartedAt = iterationTimerStartedAt
         self.iterationTimerStartedLoop = iterationTimerStartedLoop
+        self.scheduledFor = scheduledFor
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -106,6 +109,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         case iterationTimerMinutes
         case iterationTimerStartedAt
         case iterationTimerStartedLoop
+        case scheduledFor
         case createdAt
         case updatedAt
     }
@@ -136,6 +140,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         iterationTimerMinutes = try container.decodeIfPresent(Int.self, forKey: .iterationTimerMinutes)
         iterationTimerStartedAt = try container.decodeIfPresent(Date.self, forKey: .iterationTimerStartedAt)
         iterationTimerStartedLoop = try container.decodeIfPresent(Int.self, forKey: .iterationTimerStartedLoop)
+        scheduledFor = try container.decodeIfPresent(Date.self, forKey: .scheduledFor)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
     }
 
@@ -164,6 +169,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(iterationTimerMinutes, forKey: .iterationTimerMinutes)
         try container.encodeIfPresent(iterationTimerStartedAt, forKey: .iterationTimerStartedAt)
         try container.encodeIfPresent(iterationTimerStartedLoop, forKey: .iterationTimerStartedLoop)
+        try container.encodeIfPresent(scheduledFor, forKey: .scheduledFor)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
@@ -182,6 +188,18 @@ struct LoopCompletion: Identifiable, Codable, Equatable {
 }
 
 struct BreakSession: Identifiable, Codable, Equatable {
+    var id: UUID
+    var startedAt: Date
+    var endedAt: Date
+
+    init(id: UUID = UUID(), startedAt: Date, endedAt: Date = Date()) {
+        self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+}
+
+struct MeetingSession: Identifiable, Codable, Equatable {
     var id: UUID
     var startedAt: Date
     var endedAt: Date
