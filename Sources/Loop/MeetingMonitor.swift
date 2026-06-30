@@ -1,27 +1,21 @@
 import AppKit
+import CoreGraphics
 import Foundation
 
 @MainActor
 final class MeetingMonitor {
     var onMeetingStateChange: ((Bool) -> Void)?
 
-    private let meetingBundleIdentifiers: Set<String> = [
-        "us.zoom.xos",
-        "com.microsoft.teams",
-        "com.microsoft.teams2",
-        "com.cisco.webexmeetingsapp",
-        "com.webex.meetingmanager",
-        "com.apple.FaceTime"
-    ]
-
     private var timer: Timer?
-    private var isMeetingActive = false
-    private var isSuppressedUntilInactive = false
+    private var lastReportedState = false
+    private var consecutiveDetectedState: Bool?
+    private var consecutiveDetectionCount = 0
+    private var isSuppressingCurrentMeeting = false
 
     func start() {
         stop()
         evaluate()
-        timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.evaluate()
             }
@@ -33,30 +27,108 @@ final class MeetingMonitor {
         timer = nil
     }
 
-    func suppressUntilInactive() {
-        isSuppressedUntilInactive = true
+    func suppressCurrentMeetingUntilInactive() {
+        isSuppressingCurrentMeeting = true
+        lastReportedState = false
+        consecutiveDetectedState = nil
+        consecutiveDetectionCount = 0
     }
 
     private func evaluate() {
-        let detectedMeeting = hasActiveMeetingApplication()
-
-        if isSuppressedUntilInactive {
-            if detectedMeeting {
+        let detectedState = Self.isZoomMeetingActive()
+        if isSuppressingCurrentMeeting {
+            if detectedState {
                 return
             }
-            isSuppressedUntilInactive = false
+            isSuppressingCurrentMeeting = false
         }
 
-        guard detectedMeeting != isMeetingActive else { return }
-        isMeetingActive = detectedMeeting
-        onMeetingStateChange?(detectedMeeting)
+        if consecutiveDetectedState == detectedState {
+            consecutiveDetectionCount += 1
+        } else {
+            consecutiveDetectedState = detectedState
+            consecutiveDetectionCount = 1
+        }
+
+        let requiredConfirmations = detectedState ? 1 : 2
+        guard consecutiveDetectionCount >= requiredConfirmations else { return }
+        guard detectedState != lastReportedState else { return }
+
+        lastReportedState = detectedState
+        onMeetingStateChange?(detectedState)
     }
 
-    private func hasActiveMeetingApplication() -> Bool {
-        NSWorkspace.shared.runningApplications.contains { application in
-            guard !application.isTerminated else { return false }
-            guard let bundleIdentifier = application.bundleIdentifier else { return false }
-            return meetingBundleIdentifiers.contains(bundleIdentifier)
+    private static func isZoomMeetingActive() -> Bool {
+        guard isZoomRunning else { return false }
+        return hasZoomMeetingWindow || isZoomConferenceHostRunning
+    }
+
+    private static var isZoomRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains { app in
+            let bundleIdentifier = app.bundleIdentifier?.lowercased() ?? ""
+            let localizedName = app.localizedName?.lowercased() ?? ""
+            return bundleIdentifier == "us.zoom.xos"
+                || bundleIdentifier.contains("zoom")
+                || localizedName == "zoom.us"
+                || localizedName == "zoom"
         }
+    }
+
+    private static var isZoomConferenceHostRunning: Bool {
+        NSWorkspace.shared.runningApplications.contains { app in
+            let bundleIdentifier = app.bundleIdentifier?.lowercased() ?? ""
+            let localizedName = app.localizedName?.lowercased() ?? ""
+            let executableName = app.executableURL?.lastPathComponent.lowercased() ?? ""
+            return bundleIdentifier == "us.zoom.cpthost"
+                || localizedName == "cpthost"
+                || executableName == "cpthost"
+        }
+    }
+
+    private static var hasZoomMeetingWindow: Bool {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+
+        return windows.contains { window in
+            guard let ownerName = window[kCGWindowOwnerName as String] as? String else { return false }
+            let normalizedOwnerName = ownerName.lowercased()
+            guard normalizedOwnerName.contains("zoom") else { return false }
+
+            let windowName = (window[kCGWindowName as String] as? String ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return isMeetingWindowTitle(windowName)
+        }
+    }
+
+    private static func isMeetingWindowTitle(_ title: String) -> Bool {
+        let normalizedTitle = title.lowercased()
+        guard !normalizedTitle.isEmpty else { return false }
+
+        let meetingSignals = [
+            "zoom meeting",
+            "zoom webinar",
+            "meeting",
+            "webinar",
+            "waiting room",
+            "breakout rooms",
+            "participants",
+            "share screen"
+        ]
+        let nonMeetingSignals = [
+            "zoom workplace",
+            "settings",
+            "preferences",
+            "sign in",
+            "contacts",
+            "team chat",
+            "calendar",
+            "scheduler",
+            "whiteboards"
+        ]
+
+        return meetingSignals.contains { normalizedTitle.contains($0) }
+            && !nonMeetingSignals.contains { normalizedTitle.contains($0) }
     }
 }

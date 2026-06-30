@@ -137,12 +137,20 @@ struct LoopPanelView: View {
             ZStack {
                 LoopTasksView(editingTask: $editingTask) {
                     isAddingDetailedTask = true
+                } onShowBacklog: {
+                    isShowingBacklog = true
                 }
-                .allowsHitTesting(!store.isOnBreak)
-                .blur(radius: store.isOnBreak ? 1.5 : 0)
+                .allowsHitTesting(!store.isOnBreak && !store.isInRoutine)
+                .blur(radius: store.isOnBreak || store.isInRoutine ? 1.5 : 0)
 
                 if store.isOnBreak {
                     BreakOverlayView()
+                        .environmentObject(store)
+                        .zIndex(1)
+                }
+
+                if store.isInRoutine {
+                    RoutineOverlayView()
                         .environmentObject(store)
                         .zIndex(1)
                 }
@@ -174,8 +182,16 @@ struct LoopPanelView: View {
                 .environmentObject(store)
         }
         .sheet(isPresented: $isShowingSettings) {
-            SettingsPanelView()
+            SettingsPanelView(
+                onChooseApplication: onChooseApplication,
+                onClose: {
+                    isShowingSettings = false
+                }
+            )
                 .environmentObject(store)
+                .onDisappear {
+                    isShowingSettings = false
+                }
         }
         .onReceive(NotificationCenter.default.publisher(for: .loopShouldEditTask)) { notification in
             guard
@@ -189,66 +205,69 @@ struct LoopPanelView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Loop")
-                        .font(.title2.weight(.semibold))
-                    Text("\(store.loopsCompletedToday) today")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                if store.isOnBreak {
-                    Button {
-                        store.endBreak()
-                    } label: {
-                        Label("End break", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .loopHelp("End break")
-                }
-
-                HStack(spacing: 12) {
-                    Button {
-                        store.advanceLoop()
-                    } label: {
-                        Image(systemName: "arrow.right.circle.fill")
-                            .font(.title3)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
-                    .loopHelp("Next iteration")
-
-                    Button {
-                        isShowingBacklog = true
-                    } label: {
-                        Image(systemName: "tray.full")
-                            .font(.title3)
-                    }
-                    .buttonStyle(.plain)
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Loop")
+                    .font(.title2.weight(.semibold))
+                Text("Iteration \(store.loopNumber)")
+                    .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .loopHelp("Backlog")
-
-                    Button {
-                        isShowingSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                            .font(.title3)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .loopHelp("Settings")
-                }
             }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) {
+                HeaderStatChip(value: "\(store.loopsCompletedToday)", label: "loops", color: Color(nsColor: .systemGreen))
+                HeaderStatChip(value: "\(store.tasksFinishedToday.count)", label: "done", color: Color(nsColor: .systemBlue))
+                HeaderStatChip(value: "\(productivityPercentage)%", label: "prod.", color: .secondary)
+            }
+
+            if store.isOnBreak {
+                Button {
+                    store.endBreak()
+                } label: {
+                    Image(systemName: "play.fill")
+                        .font(.caption.weight(.bold))
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .loopHelp("End break")
+            }
+
+            Button {
+                store.advanceLoop()
+            } label: {
+                Image(systemName: "arrow.right.circle.fill")
+                    .font(.title3)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+            .loopHelp("Next iteration")
+
+            Button {
+                isShowingSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.title3)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .loopHelp("Settings")
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
         .padding(.bottom, 12)
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.72))
+    }
+
+    private var productivityPercentage: Int {
+        let activeDuration = store.activeDuration(on: store.currentDate)
+        guard activeDuration > 0 else { return 0 }
+        let ratio = store.productiveDuration(on: store.currentDate) / activeDuration
+        return Int(round(min(max(ratio, 0), 1) * 100))
     }
 
     private var footer: some View {
@@ -271,7 +290,7 @@ struct LoopPanelView: View {
                 .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
                 PanelReturnAwareTextField(
                     placeholder: "New task",
                     text: $newTaskTitle,
@@ -283,13 +302,34 @@ struct LoopPanelView: View {
                     }
                 )
                 .frame(height: 24)
-                .loopHelp("Enter adds task, Command Enter adds to backlog")
+                .loopHelp("Enter adds task, Command Enter adds to Later")
+
+                Button {
+                    addQuickTask()
+                } label: {
+                    Text("Now")
+                        .frame(width: 42, height: 24)
+                }
+                .buttonStyle(FooterControlButtonStyle(isProminent: true))
+                .loopHelp("Add to current iteration")
+
+                Button {
+                    addQuickBacklogTask()
+                } label: {
+                    Text("Later")
+                        .frame(width: 52, height: 24)
+                }
+                .buttonStyle(FooterControlButtonStyle())
+                .loopHelp("Add to Later")
 
                 Button {
                     isAddingDetailedTask = true
                 } label: {
                     Image(systemName: "slider.horizontal.3")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 36, height: 24)
                 }
+                .buttonStyle(FooterControlButtonStyle())
                 .loopHelp("Add with details")
             }
         }
@@ -396,6 +436,53 @@ private final class PanelKeyHandlingTextField: NSTextField {
     }
 }
 
+private struct FooterControlButtonStyle: ButtonStyle {
+    var isProminent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(isProminent ? Color.white : Color.primary)
+            .background(backgroundColor(isPressed: configuration.isPressed))
+            .overlay {
+                if !isProminent {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isProminent {
+            return Color.accentColor.opacity(isPressed ? 0.82 : 1)
+        }
+        return Color(nsColor: .controlBackgroundColor)
+            .opacity(isPressed ? 0.72 : 0.96)
+    }
+}
+
+private struct HeaderStatChip: View {
+    let value: String
+    let label: String
+    let color: Color
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Text(value)
+                .fontWeight(.bold)
+                .monospacedDigit()
+            Text(label)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(color)
+        .lineLimit(1)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background(color.opacity(0.12), in: Capsule())
+    }
+}
+
 private struct BreakOverlayView: View {
     @EnvironmentObject private var store: TaskStore
 
@@ -439,84 +526,272 @@ private struct BreakOverlayView: View {
     }
 }
 
+private struct RoutineOverlayView: View {
+    @EnvironmentObject private var store: TaskStore
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "clock.badge.checkmark.fill")
+                .font(.title2)
+                .foregroundStyle(Color.accentColor)
+
+            VStack(spacing: 4) {
+                Text(store.activeRoutineBlock?.title ?? "Routine")
+                    .font(.title3.weight(.semibold))
+                Text(remainingText)
+                    .font(.system(.title2, design: .rounded).weight(.semibold))
+                    .monospacedDigit()
+                if store.isRoutineTimeUp {
+                    Text("Time is up")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                Button {
+                    store.endRoutineBlock(markComplete: false)
+                } label: {
+                    Label("Skip", systemImage: "forward")
+                }
+                .loopHelp("End without completing")
+
+                Button {
+                    store.endRoutineBlock()
+                } label: {
+                    Label("Done", systemImage: "checkmark")
+                }
+                .buttonStyle(.borderedProminent)
+                .loopHelp("Complete routine")
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
+    }
+
+    private var remainingText: String {
+        guard !store.isRoutineTimeUp else { return "Done" }
+        let seconds = store.routineRemainingSeconds
+        let minutes = seconds / 60
+        let remainder = seconds % 60
+        return String(format: "%d:%02d", minutes, remainder)
+    }
+}
+
 private struct LoopTasksView: View {
     @EnvironmentObject private var store: TaskStore
     @Binding var editingTask: LoopTask?
     @State private var draggingTaskID: UUID?
     @State private var lastDropTargetID: UUID?
-    @State private var showsDoneTasks = false
-    @State private var showsFutureTasks = false
+    @State private var isDoneExpanded = false
+    @State private var isFutureExpanded = false
     let onAddTask: () -> Void
+    let onShowBacklog: () -> Void
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Spacer()
-
-                    HStack(spacing: 12) {
-                        Toggle("Show future", isOn: $showsFutureTasks)
-                            .toggleStyle(.checkbox)
-                            .controlSize(.small)
-
-                        Toggle("Show done", isOn: $showsDoneTasks)
-                            .toggleStyle(.checkbox)
-                            .controlSize(.small)
-                    }
-                }
-
-                if store.shouldSuggestAddingTaskToFastLoop {
-                    LoopSuggestionRow(
-                        message: "You are moving through a short loop quickly. Add another task?",
-                        actionTitle: "Add task",
-                        systemImage: "plus.circle",
-                        action: onAddTask,
-                        onDismiss: store.dismissFastLoopSuggestion
-                    )
-                }
-
-                TaskSection(title: "Open", tasks: openTasks, emptyTitle: "No open tasks") { task in
-                    TaskRow(task: task) {
-                        editingTask = task
-                    }
-                    .opacity(draggingTaskID == task.id ? 0.45 : 1)
-                    .onDrag {
-                        draggingTaskID = task.id
-                        return NSItemProvider(object: task.id.uuidString as NSString)
-                    }
-                    .onDrop(
-                        of: [.text],
-                        delegate: LoopTaskDropDelegate(
-                            targetTask: task,
-                            draggingTaskID: $draggingTaskID,
-                            lastDropTargetID: $lastDropTargetID,
-                            store: store
+        VStack(spacing: 0) {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if store.shouldSuggestAddingTaskToFastLoop {
+                        LoopSuggestionRow(
+                            message: "You are moving through a short loop quickly. Add another task?",
+                            actionTitle: "Add task",
+                            systemImage: "plus.circle",
+                            action: onAddTask,
+                            onDismiss: store.dismissFastLoopSuggestion
                         )
-                    )
-                }
+                    }
 
-                if showsDoneTasks {
-                    TaskSection(title: "Done This Iteration", tasks: store.doneTasks, emptyTitle: "No done tasks") { task in
-                        TaskRow(task: task) {
-                            editingTask = task
+                    TaskSection(title: "Open", tasks: openItems, emptyTitle: "No open tasks") { item in
+                        switch item {
+                        case .routine(let routine):
+                            RoutineDueRow(routine: routine)
+                        case .task(let task):
+                            TaskRow(task: task) {
+                                editingTask = task
+                            }
+                            .opacity(draggingTaskID == task.id ? 0.45 : 1)
+                            .onDrag {
+                                draggingTaskID = task.id
+                                return NSItemProvider(object: task.id.uuidString as NSString)
+                            }
+                            .onDrop(
+                                of: [.text],
+                                delegate: LoopTaskDropDelegate(
+                                    targetTask: task,
+                                    draggingTaskID: $draggingTaskID,
+                                    lastDropTargetID: $lastDropTargetID,
+                                    store: store
+                                )
+                            )
                         }
                     }
                 }
-
-                if showsFutureTasks {
-                    TaskSection(title: "Future", tasks: store.upcomingTasks, emptyTitle: "No future tasks") { task in
-                        TaskRow(task: task) {
-                            editingTask = task
-                        }
-                    }
-                }
+                .padding(16)
             }
-            .padding(16)
+
+            VStack(spacing: 8) {
+                CollapsibleTaskSection(title: "Simply Done", count: store.doneTasks.count, isExpanded: $isDoneExpanded) {
+                    TaskSection(title: nil, tasks: store.doneTasks, emptyTitle: "No done tasks") { task in
+                        TaskRow(task: task) { editingTask = task }
+                    }
+                }
+
+                CollapsibleTaskSection(title: "Future", count: store.upcomingTasks.count, isExpanded: $isFutureExpanded) {
+                    TaskSection(title: nil, tasks: store.upcomingTasks, emptyTitle: "No future tasks") { task in
+                        TaskRow(task: task) { editingTask = task }
+                    }
+                }
+
+                Button {
+                    onShowBacklog()
+                } label: {
+                    HStack {
+                        Text("Later")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.primary)
+
+                        Spacer()
+
+                        Text("\(store.backlogTasks.count) \(store.backlogTasks.count == 1 ? "item" : "items")")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 12)
+                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .loopHelp("Open Later")
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+            .background(Color(nsColor: .windowBackgroundColor).opacity(0.28))
         }
     }
 
     private var openTasks: [LoopTask] {
         store.currentLoopTasks.filter { !$0.doneThisLoop }
+    }
+
+    private var openItems: [LoopOpenItem] {
+        store.dueRoutineBlocks.map(LoopOpenItem.routine)
+            + openTasks.map(LoopOpenItem.task)
+    }
+}
+
+private enum LoopOpenItem: Identifiable {
+    case routine(RoutineBlock)
+    case task(LoopTask)
+
+    var id: String {
+        switch self {
+        case .routine(let routine): "routine-\(routine.id.uuidString)"
+        case .task(let task): "task-\(task.id.uuidString)"
+        }
+    }
+}
+
+private struct RoutineDueRow: View {
+    @EnvironmentObject private var store: TaskStore
+
+    let routine: RoutineBlock
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button {
+                store.startRoutineBlock(routine)
+            } label: {
+                Image(systemName: "clock.badge.checkmark")
+                    .font(.title3)
+                    .foregroundStyle(Color(nsColor: .systemTeal))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .loopHelp("Start routine")
+
+            Button {
+                store.startRoutineBlock(routine)
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(routine.title)
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption)
+                            .foregroundStyle(Color(nsColor: .systemTeal))
+                            .loopHelp("Routine")
+                    }
+
+                    HStack(spacing: 8) {
+                        CadenceBadge(cadence: routine.cadence)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TimerBadge(minutes: routine.durationMinutes, remainingSeconds: nil)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if !routine.scheduleTimes.isEmpty {
+                            RoutineScheduleBadge(scheduleTimes: routine.scheduleTimes)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Label(
+                            routine.countsAsProductive ? "Productive" : "Not productive",
+                            systemImage: routine.countsAsProductive ? "bolt.fill" : "minus.circle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                        if let appName = routine.linkedApp?.name {
+                            Text(appName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button {
+                store.startRoutineBlock(routine)
+            } label: {
+                Image(systemName: "play.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color(nsColor: .systemTeal))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .loopHelp("Start routine")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(Color(nsColor: .systemTeal).opacity(0.85))
+                .frame(width: 3)
+                .padding(.vertical, 7)
+        }
+        .contextMenu {
+            Button {
+                store.startRoutineBlock(routine)
+            } label: {
+                Label("Start Routine", systemImage: "play")
+            }
+        }
     }
 }
 
@@ -580,29 +855,31 @@ private struct LoopSuggestionRow: View {
 }
 
 private struct TaskSection<Item: Identifiable, Content: View>: View {
-    let title: String
+    let title: String?
     let tasks: [Item]
     let emptyTitle: String
     @ViewBuilder let row: (Item) -> Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
+            if let title {
+                HStack {
+                    Text(title)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
 
-                Spacer()
+                    Spacer()
 
-                Text("\(tasks.count)")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color(nsColor: .controlBackgroundColor))
-                    .clipShape(Capsule())
+                    Text("\(tasks.count)")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(nsColor: .controlBackgroundColor))
+                        .clipShape(Capsule())
+                }
             }
 
             if tasks.isEmpty {
@@ -623,11 +900,61 @@ private struct TaskSection<Item: Identifiable, Content: View>: View {
     }
 }
 
+private struct CollapsibleTaskSection<Content: View>: View {
+    let title: String
+    let count: Int
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.bold))
+                        .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 14, height: 14)
+
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+
+                    Spacer()
+
+                    Text("\(count)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 10)
+                .background(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                content
+            }
+        }
+    }
+}
+
 private struct TaskRow: View {
     @EnvironmentObject private var store: TaskStore
+    @FocusState private var isTitleFocused: Bool
 
     let task: LoopTask
     let onEdit: () -> Void
+
+    @State private var isHovered = false
+    @State private var isEditingTitle = false
+    @State private var draftTitle = ""
 
     var body: some View {
         let isFocused = store.currentFocusTaskID == task.id
@@ -636,6 +963,7 @@ private struct TaskRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Button {
+                    endTitleEdit(commit: true)
                     store.toggleDone(task)
                 } label: {
                     Image(systemName: task.isBacklog ? "tray" : (task.doneThisLoop ? "checkmark.circle.fill" : "circle"))
@@ -645,170 +973,113 @@ private struct TaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(task.isBacklog)
-                .loopHelp(task.isBacklog ? "Backlog" : (task.doneThisLoop ? "Reopen" : "Done"))
+                .loopHelp(task.isBacklog ? "Later" : (task.doneThisLoop ? "Reopen" : "Done"))
 
-                Button {
-                    onEdit()
-                } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 6) {
-                            Text(task.title)
-                                .font(.body.weight(isFocused ? .semibold : .medium))
-                                .foregroundStyle(task.doneThisLoop ? .secondary : .primary)
-                                .strikethrough(task.doneThisLoop, color: .secondary)
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                            if task.isPriority {
-                                Image(systemName: "star.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.yellow)
-                                    .loopHelp("Priority")
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        if isEditingTitle {
+                            TextField("", text: $draftTitle)
+                                .textFieldStyle(.plain)
+                                .font(.body.weight(.medium))
+                                .focused($isTitleFocused)
+                                .onSubmit {
+                                    endTitleEdit(commit: true)
+                                }
+                                .onExitCommand {
+                                    endTitleEdit(commit: false)
+                                }
+                        } else {
+                            Button {
+                                beginTitleEdit()
+                            } label: {
+                                Text(task.title)
+                                    .font(.body.weight(.medium))
+                                    .foregroundStyle(task.doneThisLoop ? .secondary : .primary)
+                                    .strikethrough(task.doneThisLoop, color: .secondary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            .buttonStyle(.plain)
+                            .loopHelp("Rename")
                         }
 
-                        HStack(spacing: 8) {
-                            if let scheduledFor = task.scheduledFor {
-                                TaskScheduleBadge(scheduledFor: scheduledFor)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            } else {
-                                CadenceBadge(cadence: task.cadence)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
+                        if task.isPriority {
+                            Image(systemName: "star.fill")
+                                .font(.caption)
+                                .foregroundStyle(.yellow)
+                                .loopHelp("Priority")
+                        }
+                    }
 
-                            if let iterationTimerMinutes = task.iterationTimerMinutes {
-                                TimerBadge(
-                                    minutes: iterationTimerMinutes,
-                                    remainingSeconds: isFocused ? store.iterationTimerRemainingSeconds(for: task) : nil
-                                )
+                    HStack(spacing: 8) {
+                        CadenceBadge(cadence: task.cadence)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        if let iterationTimerMinutes = task.iterationTimerMinutes {
+                            TimerBadge(
+                                minutes: iterationTimerMinutes,
+                                remainingSeconds: isFocused ? store.iterationTimerRemainingSeconds(for: task) : nil
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+
+                        if let scheduledFor = task.scheduledFor, scheduledFor > store.currentDate {
+                            TaskScheduleBadge(scheduledFor: scheduledFor)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            }
+                        }
 
-                            if let appName = task.linkedApp?.name {
-                                Text(appName)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
+                        if let appName = task.linkedApp?.name {
+                            Text(appName)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        if isSnoozed {
+                            Label("Snoozed", systemImage: "clock")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if let nextDueLoop = store.nextDueLoop(for: task), nextDueLoop > store.loopNumber {
+                            Label("Loop \(nextDueLoop)", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .buttonStyle(.plain)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                Menu {
+                    taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .opacity(isHovered || isEditingTitle ? 1 : 0)
+                .disabled(!(isHovered || isEditingTitle))
+                .loopHelp("More")
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
-            .background(isFocused ? Color.accentColor.opacity(0.16) : Color(nsColor: .controlBackgroundColor).opacity(0.78))
+            .background(Color(nsColor: .controlBackgroundColor).opacity(isHovered ? 0.94 : 0.78))
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                if isFocused {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.55), lineWidth: 1)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            .onChange(of: isTitleFocused) { focused in
+                if !focused && isEditingTitle {
+                    endTitleEdit(commit: true)
                 }
             }
             .contextMenu {
-                if task.isBacklog {
-                    Button {
-                        store.addToIteration(task)
-                    } label: {
-                        Label("Add to Iteration", systemImage: "arrow.up.circle")
-                    }
-                }
-
-                if !task.isBacklog && !task.doneThisLoop && !isSnoozed {
-                    Button {
-                        store.focus(task)
-                    } label: {
-                        Label("Focus", systemImage: "scope")
-                    }
-                    .disabled(isFocused)
-
-                    Divider()
-                }
-
-                if !task.isBacklog && isSnoozed {
-                    Button {
-                        store.unsnooze(task)
-                    } label: {
-                        Label("Unsnooze", systemImage: "clock.arrow.circlepath")
-                    }
-                } else if !task.isBacklog, task.scheduledFor.map({ $0 > store.currentDate }) == true {
-                    Button {
-                        store.clearSchedule(for: task)
-                    } label: {
-                        Label("Add Now", systemImage: "calendar.badge.clock")
-                    }
-                } else if !task.isBacklog {
-                    Button {
-                        store.snooze(task, minutes: 30)
-                    } label: {
-                        if task.doneThisLoop {
-                            Label("Snooze Next Iterations", systemImage: "clock")
-                        } else {
-                            Label("Snooze 30 minutes", systemImage: "clock")
-                        }
-                    }
-
-                    Menu {
-                        ForEach(SnoozePreset.secondaryOptions) { preset in
-                            Button {
-                                store.snooze(task, minutes: preset.minutes)
-                            } label: {
-                                Label(preset.title, systemImage: preset.systemImage)
-                            }
-                        }
-
-                        Divider()
-
-                        Button {
-                            store.moveToBacklog(task)
-                        } label: {
-                            Label("Move to backlog", systemImage: "tray.and.arrow.down")
-                        }
-                    } label: {
-                        Label("Snooze for...", systemImage: "clock.badge.questionmark")
-                    }
-                }
-
-                Divider()
-
-                Button {
-                    onEdit()
-                } label: {
-                    Label(task.scheduledFor == nil ? "Edit" : "Edit Routine", systemImage: "pencil")
-                }
-
-                Button {
-                    store.togglePriority(task)
-                } label: {
-                    Label(
-                        task.isPriority ? "Remove Priority" : "Mark Priority",
-                        systemImage: task.isPriority ? "star.slash" : "star"
-                    )
-                }
-
-                if !task.isBacklog {
-                    Button {
-                        store.moveToBacklog(task)
-                    } label: {
-                        Label("Move to Backlog", systemImage: "tray.and.arrow.down")
-                    }
-                }
-
-                Button {
-                    store.finish(task)
-                } label: {
-                    Label("Finish", systemImage: "checkmark.seal")
-                }
-
-                Button {
-                    store.delete(task)
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
+                taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
             }
 
             if let suggestion = store.suggestion(for: task) {
@@ -822,6 +1093,153 @@ private struct TaskRow: View {
                     store.dismissSuggestion(suggestion, for: task)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func taskActions(isFocused: Bool, isSnoozed: Bool) -> some View {
+        if task.isBacklog {
+            Button {
+                store.addToIteration(task)
+            } label: {
+                Label("Add to Iteration", systemImage: "arrow.up.circle")
+            }
+        }
+
+        if !task.isBacklog && !task.doneThisLoop && !isSnoozed {
+            Button {
+                store.focus(task)
+            } label: {
+                Label("Focus", systemImage: "scope")
+            }
+            .disabled(isFocused)
+
+            if task.iterationTimerMinutes != nil {
+                Menu {
+                    Button {
+                        store.extendIterationTimer(for: task, by: 2)
+                    } label: {
+                        Label("2 minutes", systemImage: "plus.circle")
+                    }
+
+                    Button {
+                        store.extendIterationTimer(for: task, by: 5)
+                    } label: {
+                        Label("5 minutes", systemImage: "plus.circle")
+                    }
+                } label: {
+                    Label("Extend timer", systemImage: "timer")
+                }
+            }
+
+            Divider()
+        }
+
+        if !task.isBacklog && isSnoozed {
+            Button {
+                store.unsnooze(task)
+            } label: {
+                Label("Unsnooze", systemImage: "clock.arrow.circlepath")
+            }
+        } else if !task.isBacklog, task.scheduledFor.map({ $0 > store.currentDate }) == true {
+            Button {
+                store.clearSchedule(for: task)
+            } label: {
+                Label("Add Now", systemImage: "calendar.badge.clock")
+            }
+        } else if !task.isBacklog {
+            Button {
+                store.snooze(task, minutes: 30)
+            } label: {
+                if task.doneThisLoop {
+                    Label("Snooze Next Iterations", systemImage: "clock")
+                } else {
+                    Label("Snooze 30 minutes", systemImage: "clock")
+                }
+            }
+
+            Menu {
+                ForEach(SnoozePreset.secondaryOptions) { preset in
+                    Button {
+                        store.snooze(task, minutes: preset.minutes)
+                    } label: {
+                        Label(preset.title, systemImage: preset.systemImage)
+                    }
+                }
+
+                Divider()
+
+                Button {
+                    store.moveToBacklog(task)
+                } label: {
+                    Label("Move to Later", systemImage: "tray.and.arrow.down")
+                }
+            } label: {
+                Label("Snooze for...", systemImage: "clock.badge.questionmark")
+            }
+        }
+
+        Divider()
+
+        Button {
+            beginTitleEdit()
+        } label: {
+            Label("Rename", systemImage: "text.cursor")
+        }
+
+        Button {
+            onEdit()
+        } label: {
+            Label("Edit Details", systemImage: "slider.horizontal.3")
+        }
+
+        Button {
+            store.togglePriority(task)
+        } label: {
+            Label(
+                task.isPriority ? "Remove Priority" : "Mark Priority",
+                systemImage: task.isPriority ? "star.slash" : "star"
+            )
+        }
+
+        if !task.isBacklog {
+            Button {
+                store.moveToBacklog(task)
+            } label: {
+                Label("Move to Later", systemImage: "tray.and.arrow.down")
+            }
+        }
+
+        Button {
+            store.finish(task)
+        } label: {
+            Label("Finish", systemImage: "checkmark.seal")
+        }
+
+        Button {
+            store.delete(task)
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
+    }
+
+    private func beginTitleEdit() {
+        draftTitle = task.title
+        isEditingTitle = true
+        DispatchQueue.main.async {
+            isTitleFocused = true
+        }
+    }
+
+    private func endTitleEdit(commit: Bool) {
+        guard isEditingTitle else { return }
+        let title = draftTitle
+        isEditingTitle = false
+        isTitleFocused = false
+        if commit {
+            store.updateTaskTitle(task, title: title)
+        } else {
+            draftTitle = task.title
         }
     }
 
@@ -881,8 +1299,7 @@ private struct TimerBadge: View {
 
     private var timerText: String {
         guard let remainingSeconds else { return "\(minutes)m" }
-        let remainingMinutes = max(0, Int(ceil(Double(remainingSeconds) / 60.0)))
-        return "\(remainingMinutes)m"
+        return TaskStore.timerText(forRemainingSeconds: remainingSeconds)
     }
 }
 
@@ -903,6 +1320,24 @@ private struct TaskScheduleBadge: View {
             return "Tomorrow \(ScheduleFormatters.time.string(from: scheduledFor))"
         }
         return ScheduleFormatters.shortDateTime.string(from: scheduledFor)
+    }
+}
+
+private struct RoutineScheduleBadge: View {
+    let scheduleTimes: [DailyScheduleTime]
+
+    var body: some View {
+        Label(scheduleText, systemImage: "clock")
+            .lineLimit(1)
+    }
+
+    private var scheduleText: String {
+        scheduleTimes
+            .sorted()
+            .map { scheduleTime in
+                String(format: "%02d:%02d", scheduleTime.hour, scheduleTime.minute)
+            }
+            .joined(separator: ", ")
     }
 }
 
@@ -967,9 +1402,9 @@ private struct BacklogPanelView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Backlog")
+                    Text("Later")
                         .font(.title3.weight(.semibold))
-                    Text("\(store.backlogTasks.count) \(store.backlogTasks.count == 1 ? "task" : "tasks")")
+                    Text("\(store.backlogTasks.count) \(store.backlogTasks.count == 1 ? "item" : "items")")
                         .font(.caption.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
@@ -992,7 +1427,7 @@ private struct BacklogPanelView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    TaskSection(title: "Backlog", tasks: store.backlogTasks, emptyTitle: "No backlog tasks") { task in
+                    TaskSection(title: "Later", tasks: store.backlogTasks, emptyTitle: "No later tasks") { task in
                         BacklogTaskRow(task: task) {
                             editingTask = task
                         }
@@ -1040,18 +1475,18 @@ private struct BacklogTaskRow: View {
                 }
 
                 HStack(spacing: 8) {
-                    if let scheduledFor = task.scheduledFor {
-                        TaskScheduleBadge(scheduledFor: scheduledFor)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        CadenceBadge(cadence: task.cadence)
+                    CadenceBadge(cadence: task.cadence)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let iterationTimerMinutes = task.iterationTimerMinutes {
+                        TimerBadge(minutes: iterationTimerMinutes, remainingSeconds: nil)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
-                    if let iterationTimerMinutes = task.iterationTimerMinutes {
-                        TimerBadge(minutes: iterationTimerMinutes, remainingSeconds: nil)
+                    if let scheduledFor = task.scheduledFor {
+                        TaskScheduleBadge(scheduledFor: scheduledFor)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -1077,7 +1512,7 @@ private struct BacklogTaskRow: View {
             } label: {
                 Image(systemName: "pencil")
             }
-            .loopHelp("Edit")
+            .loopHelp("Edit details")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -1093,7 +1528,7 @@ private struct BacklogTaskRow: View {
             Button {
                 onEdit()
             } label: {
-                Label("Edit", systemImage: "pencil")
+                Label("Edit Details", systemImage: "slider.horizontal.3")
             }
 
             Button {
@@ -1112,8 +1547,9 @@ private struct BacklogTaskRow: View {
 }
 
 private struct SettingsPanelView: View {
-    @Environment(\.dismiss) private var dismiss
     @State private var selectedSection: SettingsSection = .general
+    let onChooseApplication: () -> LinkedApp?
+    let onClose: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1128,10 +1564,10 @@ private struct SettingsPanelView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 260)
+                .frame(width: 340)
 
                 Button {
-                    dismiss()
+                    onClose()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title3)
@@ -1147,6 +1583,8 @@ private struct SettingsPanelView: View {
             switch selectedSection {
             case .general:
                 GeneralSettingsView()
+            case .routines:
+                RoutineSettingsView(onChooseApplication: onChooseApplication)
             case .stats:
                 StatisticsView()
             case .shortcuts:
@@ -1160,6 +1598,7 @@ private struct SettingsPanelView: View {
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case general
+    case routines
     case stats
     case shortcuts
 
@@ -1168,8 +1607,158 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: "General"
+        case .routines: "Routines"
         case .stats: "Stats"
         case .shortcuts: "Shortcuts"
+        }
+    }
+}
+
+private struct RoutineSettingsView: View {
+    @EnvironmentObject private var store: TaskStore
+    @State private var editingRoutine: RoutineBlock?
+    @State private var isAddingRoutine = false
+
+    let onChooseApplication: () -> LinkedApp?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Routine Blocks")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
+
+                Spacer()
+
+                Button {
+                    isAddingRoutine = true
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+            .padding(16)
+
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    if store.routineBlocks.isEmpty {
+                        Text("No routine blocks")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 12)
+                            .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    } else {
+                    ForEach(store.routineBlocks) { routine in
+                        RoutineSettingsRow(routine: routine) {
+                                editingRoutine = routine
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 16)
+            }
+        }
+        .sheet(item: $editingRoutine) { routine in
+            RoutineEditorView(routine: routine, onChooseApplication: onChooseApplication) { updatedRoutine in
+                store.updateRoutineBlock(updatedRoutine)
+            }
+            .environmentObject(store)
+        }
+        .sheet(isPresented: $isAddingRoutine) {
+            RoutineEditorView(routine: nil, onChooseApplication: onChooseApplication) { newRoutine in
+                store.addRoutineBlock(
+                    title: newRoutine.title,
+                    linkedApp: newRoutine.linkedApp,
+                    cadence: newRoutine.cadence,
+                    durationMinutes: newRoutine.durationMinutes,
+                    countsAsProductive: newRoutine.countsAsProductive,
+                    isEnabled: newRoutine.isEnabled,
+                    scheduleTimes: newRoutine.scheduleTimes
+                )
+            }
+            .environmentObject(store)
+        }
+    }
+}
+
+private struct RoutineSettingsRow: View {
+    @EnvironmentObject private var store: TaskStore
+
+    let routine: RoutineBlock
+    let onEdit: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: routine.isEnabled ? "clock.badge.checkmark" : "clock.badge.xmark")
+                .font(.title3)
+                .foregroundStyle(routine.isEnabled ? Color.accentColor : .secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(routine.title)
+                    .font(.body.weight(.medium))
+                    .lineLimit(1)
+
+                HStack(spacing: 8) {
+                    CadenceBadge(cadence: routine.cadence)
+                    TimerBadge(minutes: routine.durationMinutes, remainingSeconds: nil)
+                    Text(routine.countsAsProductive ? "Productive" : "Not productive")
+                    if !routine.scheduleTimes.isEmpty {
+                        RoutineScheduleBadge(scheduleTimes: routine.scheduleTimes)
+                    }
+                    if let appName = routine.linkedApp?.name {
+                        Text(appName)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                store.startRoutineBlock(routine)
+            } label: {
+                Image(systemName: "play")
+            }
+            .disabled(!routine.isEnabled)
+            .loopHelp("Start now")
+
+            Button {
+                onEdit()
+            } label: {
+                Image(systemName: "pencil")
+            }
+            .loopHelp("Edit")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.78))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contextMenu {
+            Button {
+                store.startRoutineBlock(routine)
+            } label: {
+                Label("Start Now", systemImage: "play")
+            }
+            .disabled(!routine.isEnabled)
+
+            Button {
+                onEdit()
+            } label: {
+                Label("Edit", systemImage: "pencil")
+            }
+
+            Button {
+                store.deleteRoutineBlock(routine)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
         }
     }
 }
@@ -1191,6 +1780,16 @@ private struct GeneralSettingsView: View {
                     },
                     set: { isEnabled in
                         store.setAutoOpenFocusedTaskApp(isEnabled)
+                    }
+                ))
+                .toggleStyle(.checkbox)
+
+                Toggle("Open Loop at login", isOn: Binding(
+                    get: {
+                        store.openLoopAtLogin
+                    },
+                    set: { isEnabled in
+                        store.setOpenLoopAtLogin(isEnabled)
                     }
                 ))
                 .toggleStyle(.checkbox)
@@ -1262,6 +1861,7 @@ private struct StatisticsView: View {
     @EnvironmentObject private var store: TaskStore
     @State private var selectedDate = Date()
     @State private var scope: StatisticsScope = .day
+    @State private var mode: StatisticsMode = .summary
 
     private let columns = [
         GridItem(.flexible(), spacing: 10),
@@ -1282,31 +1882,71 @@ private struct StatisticsView: View {
                     dateControls
                 }
 
-                LazyVGrid(columns: columns, spacing: 10) {
-                    StatTile(title: "Iterations", value: "\(iterationsCount)", systemImage: "arrow.triangle.2.circlepath")
-                    StatTile(title: "Finished", value: "\(finishedCount)", systemImage: "checkmark.seal")
-                    StatTile(title: "Breaks", value: "\(breakCount)", systemImage: "cup.and.saucer")
-                    StatTile(title: "Break time", value: breakDurationText, systemImage: "timer")
-                    StatTile(title: "Meetings", value: "\(meetingCount)", systemImage: "video")
-                    StatTile(title: "Meeting time", value: meetingDurationText, systemImage: "person.2.wave.2")
-                    StatTile(
-                        title: "Avg Iterations / Task",
-                        value: averageText,
-                        systemImage: "chart.bar"
-                    )
-                    StatTile(
-                        title: scope == .total ? "Days Active" : "All-Time Finished",
-                        value: "\(referenceCount)",
-                        systemImage: "list.bullet"
-                    )
+                Picker("", selection: $mode) {
+                    ForEach(StatisticsMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
                 }
+                .pickerStyle(.segmented)
 
-                if scope == .week {
-                    WeekSummaryView(days: weekSummaryDays)
-                }
+                switch mode {
+                case .summary:
+                    StatisticsSummaryView(
+                        metrics: topMetrics,
+                        activeText: activeDurationText,
+                        productiveText: productiveDurationText,
+                        breakText: breakDurationText,
+                        meetingText: meetingDurationText,
+                        routineText: routineDurationText,
+                        activeDuration: activeDuration,
+                        productiveDuration: productiveDuration,
+                        breakDuration: breakDuration,
+                        meetingDuration: meetingDuration,
+                        routineDuration: routineDuration,
+                        productiveRatio: productiveRatio,
+                        meetingCount: meetingCount,
+                        breakCount: breakCount,
+                        routineCount: routineCount,
+                        iterationsCount: iterationsCount,
+                        finishedCount: finishedCount,
+                        averageText: averageText
+                    )
 
-                TaskSection(title: "Finished Tasks", tasks: finishedStats, emptyTitle: "No finished tasks") { stat in
-                    CompletedTaskStatRow(stat: stat)
+                    if scope == .week {
+                        WeekSummaryView(days: weekSummaryDays, style: .productivity)
+                    }
+
+                case .details:
+                    LazyVGrid(columns: columns, spacing: 10) {
+                        StatTile(title: "Iterations", value: "\(iterationsCount)", systemImage: "arrow.triangle.2.circlepath")
+                        StatTile(title: "Finished", value: "\(finishedCount)", systemImage: "checkmark.seal")
+                        StatTile(title: "Breaks", value: "\(breakCount)", systemImage: "cup.and.saucer")
+                        StatTile(title: "Break time", value: breakDurationText, systemImage: "timer")
+                        StatTile(title: "Meetings", value: "\(meetingCount)", systemImage: "video")
+                        StatTile(title: "Meeting time", value: meetingDurationText, systemImage: "person.2.wave.2")
+                        StatTile(title: "Routines", value: "\(routineCount)", systemImage: "clock.badge.checkmark")
+                        StatTile(title: "Routine time", value: routineDurationText, systemImage: "timer")
+                        StatTile(title: "Active time", value: activeDurationText, systemImage: "desktopcomputer")
+                        StatTile(title: "Productive", value: productiveDurationText, systemImage: "bolt")
+                        StatTile(
+                            title: "Avg Iterations / Task",
+                            value: averageText,
+                            systemImage: "chart.bar"
+                        )
+                        StatTile(
+                            title: scope == .total ? "Days Active" : "All-Time Finished",
+                            value: "\(referenceCount)",
+                            systemImage: "list.bullet"
+                        )
+                    }
+
+                    if scope == .week {
+                        WeekSummaryView(days: weekSummaryDays, style: .full)
+                    }
+
+                    TaskSection(title: "Finished Tasks", tasks: finishedStats, emptyTitle: "No finished tasks") { stat in
+                        CompletedTaskStatRow(stat: stat)
+                    }
                 }
             }
             .padding(16)
@@ -1367,16 +2007,15 @@ private struct StatisticsView: View {
     }
 
     private var breakDurationText: String {
-        let duration: TimeInterval
+        StatisticsDurationFormatter.string(from: breakDuration)
+    }
+
+    private var breakDuration: TimeInterval {
         switch scope {
-        case .day:
-            duration = store.breakDuration(on: selectedDate)
-        case .week:
-            duration = store.breakDuration(in: selectedWeekInterval)
-        case .total:
-            duration = store.breakDurationTotal
+        case .day: store.breakDuration(on: selectedDate)
+        case .week: store.breakDuration(in: selectedWeekInterval)
+        case .total: store.breakDurationTotal
         }
-        return StatisticsDurationFormatter.string(from: duration)
     }
 
     private var meetingCount: Int {
@@ -1388,16 +2027,85 @@ private struct StatisticsView: View {
     }
 
     private var meetingDurationText: String {
-        let duration: TimeInterval
+        StatisticsDurationFormatter.string(from: meetingDuration)
+    }
+
+    private var meetingDuration: TimeInterval {
+        switch scope {
+        case .day: store.meetingDuration(on: selectedDate)
+        case .week: store.meetingDuration(in: selectedWeekInterval)
+        case .total: store.meetingDurationTotal
+        }
+    }
+
+    private var routineCount: Int {
+        switch scope {
+        case .day: store.routineCount(on: selectedDate)
+        case .week: store.routineCount(in: selectedWeekInterval)
+        case .total: store.routineCountTotal
+        }
+    }
+
+    private var routineDurationText: String {
+        StatisticsDurationFormatter.string(from: routineDuration)
+    }
+
+    private var routineDuration: TimeInterval {
+        switch scope {
+        case .day: store.routineDuration(on: selectedDate)
+        case .week: store.routineDuration(in: selectedWeekInterval)
+        case .total: store.routineDurationTotal
+        }
+    }
+
+    private var activeDurationText: String {
+        StatisticsDurationFormatter.string(from: activeDuration)
+    }
+
+    private var activeDuration: TimeInterval {
+        switch scope {
+        case .day: store.activeDuration(on: selectedDate)
+        case .week: store.activeDuration(in: selectedWeekInterval)
+        case .total: store.activeDurationTotal
+        }
+    }
+
+    private var productiveDurationText: String {
+        StatisticsDurationFormatter.string(from: productiveDuration)
+    }
+
+    private var productiveDuration: TimeInterval {
+        switch scope {
+        case .day: store.productiveDuration(on: selectedDate)
+        case .week: store.productiveDuration(in: selectedWeekInterval)
+        case .total: store.productiveDurationTotal
+        }
+    }
+
+    private var productiveRatio: Double {
+        let activeDuration: TimeInterval
+        let productiveDuration: TimeInterval
         switch scope {
         case .day:
-            duration = store.meetingDuration(on: selectedDate)
+            activeDuration = store.activeDuration(on: selectedDate)
+            productiveDuration = store.productiveDuration(on: selectedDate)
         case .week:
-            duration = store.meetingDuration(in: selectedWeekInterval)
+            activeDuration = store.activeDuration(in: selectedWeekInterval)
+            productiveDuration = store.productiveDuration(in: selectedWeekInterval)
         case .total:
-            duration = store.meetingDurationTotal
+            activeDuration = store.activeDurationTotal
+            productiveDuration = store.productiveDurationTotal
         }
-        return StatisticsDurationFormatter.string(from: duration)
+        guard activeDuration > 0 else { return 0 }
+        return min(max(productiveDuration / activeDuration, 0), 1)
+    }
+
+    private var topMetrics: [StatisticMetric] {
+        [
+            StatisticMetric(title: "Productive", value: productiveDurationText, systemImage: "bolt", color: Color(nsColor: .systemGreen)),
+            StatisticMetric(title: "Active", value: activeDurationText, systemImage: "desktopcomputer", color: Color(nsColor: .systemPurple)),
+            StatisticMetric(title: "Finished", value: "\(finishedCount)", systemImage: "checkmark.seal", color: .accentColor)
+        ]
     }
 
     private var finishedStats: [TaskCompletionStat] {
@@ -1487,7 +2195,11 @@ private struct StatisticsView: View {
                 breaks: store.breakCount(on: day),
                 breakDuration: store.breakDuration(on: day),
                 meetings: store.meetingCount(on: day),
-                meetingDuration: store.meetingDuration(on: day)
+                meetingDuration: store.meetingDuration(on: day),
+                routines: store.routineCount(on: day),
+                routineDuration: store.routineDuration(on: day),
+                activeDuration: store.activeDuration(on: day),
+                productiveDuration: store.productiveDuration(on: day)
             )
         }
     }
@@ -1514,6 +2226,284 @@ private enum StatisticsScope: String, CaseIterable, Identifiable {
     }
 }
 
+private enum StatisticsMode: String, CaseIterable, Identifiable {
+    case summary
+    case details
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .summary: "Summary"
+        case .details: "Details"
+        }
+    }
+}
+
+private struct StatisticMetric: Identifiable, Equatable {
+    var id: String { title }
+    var title: String
+    var value: String
+    var systemImage: String
+    var color: Color
+}
+
+private struct StatisticsSummaryView: View {
+    let metrics: [StatisticMetric]
+    let activeText: String
+    let productiveText: String
+    let breakText: String
+    let meetingText: String
+    let routineText: String
+    let activeDuration: TimeInterval
+    let productiveDuration: TimeInterval
+    let breakDuration: TimeInterval
+    let meetingDuration: TimeInterval
+    let routineDuration: TimeInterval
+    let productiveRatio: Double
+    let meetingCount: Int
+    let breakCount: Int
+    let routineCount: Int
+    let iterationsCount: Int
+    let finishedCount: Int
+    let averageText: String
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: columns, spacing: 10) {
+                ForEach(metrics) { metric in
+                    TopStatCard(metric: metric)
+                }
+            }
+
+            TimeBalanceCard(
+                activeText: activeText,
+                productiveText: productiveText,
+                breakText: breakText,
+                meetingText: meetingText,
+                routineText: routineText,
+                activeDuration: activeDuration,
+                productiveDuration: productiveDuration,
+                breakDuration: breakDuration,
+                meetingDuration: meetingDuration,
+                routineDuration: routineDuration,
+                productiveRatio: productiveRatio
+            )
+
+            VStack(spacing: 8) {
+                SummaryFactRow(title: "Output", value: "\(iterationsCount) loops · \(finishedCount) finished", systemImage: "arrow.triangle.2.circlepath")
+                SummaryFactRow(title: "Scheduled", value: "\(routineCount) routines · \(meetingCount) meetings · \(breakCount) breaks", systemImage: "pause.circle")
+                SummaryFactRow(title: "Average", value: "\(averageText) iterations / task", systemImage: "chart.bar")
+            }
+        }
+    }
+}
+
+private struct TopStatCard: View {
+    let metric: StatisticMetric
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: metric.systemImage)
+                .font(.title3)
+                .foregroundStyle(metric.color)
+                .frame(height: 22, alignment: .leading)
+
+            Text(metric.value)
+                .font(.title3.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Text(metric.title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct TimeBalanceCard: View {
+    let activeText: String
+    let productiveText: String
+    let breakText: String
+    let meetingText: String
+    let routineText: String
+    let activeDuration: TimeInterval
+    let productiveDuration: TimeInterval
+    let breakDuration: TimeInterval
+    let meetingDuration: TimeInterval
+    let routineDuration: TimeInterval
+    let productiveRatio: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Time balance", systemImage: "clock")
+                    .font(.callout.weight(.semibold))
+
+                Spacer()
+
+                Text("\(Int(round(productiveRatio * 100)))%")
+                    .font(.callout.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+
+            TimeBalanceTrack(
+                activeDuration: activeDuration,
+                productiveDuration: productiveDuration,
+                routineDuration: routineDuration,
+                meetingDuration: meetingDuration,
+                breakDuration: breakDuration
+            )
+            .frame(height: 10)
+
+            HStack(spacing: 10) {
+                MiniStatLabel(title: "Active", value: activeText, color: Color(nsColor: .systemPurple))
+                MiniStatLabel(title: "Productive", value: productiveText, color: Color(nsColor: .systemGreen))
+                MiniStatLabel(title: "Routines", value: routineText, color: Color(nsColor: .systemTeal))
+                MiniStatLabel(title: "Meetings", value: meetingText, color: Color(nsColor: .systemBlue))
+                MiniStatLabel(title: "Breaks", value: breakText, color: Color(nsColor: .systemOrange))
+            }
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct MiniStatLabel: View {
+    let title: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 7, height: 7)
+                Text(title)
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct TimeBalanceTrack: View {
+    let activeDuration: TimeInterval
+    let productiveDuration: TimeInterval
+    let routineDuration: TimeInterval
+    let meetingDuration: TimeInterval
+    let breakDuration: TimeInterval
+
+    private var segments: [TimeBalanceSegment] {
+        [
+            TimeBalanceSegment(value: productiveDuration, color: Color(nsColor: .systemGreen)),
+            TimeBalanceSegment(value: routineDuration, color: Color(nsColor: .systemTeal)),
+            TimeBalanceSegment(value: meetingDuration, color: Color(nsColor: .systemBlue)),
+            TimeBalanceSegment(value: breakDuration, color: Color(nsColor: .systemOrange))
+        ]
+        .filter { $0.value > 0 }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let height = proxy.size.height
+            let total = max(activeDuration, 1)
+            let resolvedSegments = resolvedSegments(width: width, total: total)
+
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(Color.secondary.opacity(0.16))
+
+                HStack(spacing: 0) {
+                    ForEach(resolvedSegments) { segment in
+                        Rectangle()
+                            .fill(segment.color.opacity(0.9))
+                            .frame(width: segment.width, height: height)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            }
+        }
+    }
+
+    private func resolvedSegments(width: CGFloat, total: TimeInterval) -> [ResolvedTimeBalanceSegment] {
+        var usedWidth: CGFloat = 0
+        return segments.compactMap { segment in
+            guard usedWidth < width else { return nil }
+            let rawWidth = width * CGFloat(min(max(segment.value / total, 0), 1))
+            let segmentWidth = min(rawWidth, width - usedWidth)
+            guard segmentWidth > 0 else { return nil }
+            usedWidth += segmentWidth
+            return ResolvedTimeBalanceSegment(width: segmentWidth, color: segment.color)
+        }
+    }
+}
+
+private struct TimeBalanceSegment {
+    let value: TimeInterval
+    let color: Color
+}
+
+private struct ResolvedTimeBalanceSegment: Identifiable {
+    let id = UUID()
+    let width: CGFloat
+    let color: Color
+}
+
+private struct SummaryFactRow: View {
+    let title: String
+    let value: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+
+            Text(title)
+                .font(.callout.weight(.medium))
+
+            Spacer()
+
+            Text(value)
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color(nsColor: .controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
 private struct WeekSummaryDay: Identifiable, Equatable {
     var id: Date
     var date: Date
@@ -1523,10 +2513,15 @@ private struct WeekSummaryDay: Identifiable, Equatable {
     var breakDuration: TimeInterval
     var meetings: Int
     var meetingDuration: TimeInterval
+    var routines: Int
+    var routineDuration: TimeInterval
+    var activeDuration: TimeInterval
+    var productiveDuration: TimeInterval
 }
 
 private struct WeekSummaryView: View {
     let days: [WeekSummaryDay]
+    let style: WeekSummaryStyle
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1536,36 +2531,53 @@ private struct WeekSummaryView: View {
                 .textCase(.uppercase)
 
             WeekChartCard(
-                title: "Output",
+                title: "Productivity",
                 legend: [
-                    WeekChartLegendItem(title: "Loops", color: .accentColor),
-                    WeekChartLegendItem(title: "Finished", color: Color(nsColor: .systemGreen))
+                    WeekChartLegendItem(title: "Active", color: Color(nsColor: .systemPurple)),
+                    WeekChartLegendItem(title: "Productive", color: Color(nsColor: .systemGreen))
                 ]
             ) {
-                WorkWeekChart(days: days)
+                ProductiveWeekChart(days: days)
             }
 
-            WeekChartCard(
-                title: "Breaks",
-                legend: [
-                    WeekChartLegendItem(title: "Time", color: Color(nsColor: .systemOrange)),
-                    WeekChartLegendItem(title: "Count", color: .secondary)
-                ]
-            ) {
-                BreakWeekChart(days: days)
-            }
+            if style == .full {
+                WeekChartCard(
+                    title: "Output",
+                    legend: [
+                        WeekChartLegendItem(title: "Loops", color: .accentColor),
+                        WeekChartLegendItem(title: "Finished", color: Color(nsColor: .systemGreen))
+                    ]
+                ) {
+                    WorkWeekChart(days: days)
+                }
 
-            WeekChartCard(
-                title: "Meetings",
-                legend: [
-                    WeekChartLegendItem(title: "Time", color: Color(nsColor: .systemBlue)),
-                    WeekChartLegendItem(title: "Count", color: .secondary)
-                ]
-            ) {
-                MeetingWeekChart(days: days)
+                WeekChartCard(
+                    title: "Breaks",
+                    legend: [
+                        WeekChartLegendItem(title: "Time", color: Color(nsColor: .systemOrange)),
+                        WeekChartLegendItem(title: "Count", color: .secondary)
+                    ]
+                ) {
+                    BreakWeekChart(days: days)
+                }
+
+                WeekChartCard(
+                    title: "Meetings",
+                    legend: [
+                        WeekChartLegendItem(title: "Time", color: Color(nsColor: .systemBlue)),
+                        WeekChartLegendItem(title: "Count", color: .secondary)
+                    ]
+                ) {
+                    MeetingWeekChart(days: days)
+                }
             }
         }
     }
+}
+
+private enum WeekSummaryStyle {
+    case productivity
+    case full
 }
 
 private struct WeekChartLegendItem: Identifiable {
@@ -1758,6 +2770,57 @@ private struct MeetingWeekChart: View {
     }
 }
 
+private struct ProductiveWeekChart: View {
+    let days: [WeekSummaryDay]
+
+    private var maxMinutes: Int {
+        max(1, days.map { activeMinutes(for: $0) }.max() ?? 0)
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ForEach(days) { day in
+                HStack(spacing: 10) {
+                    dayLabel(for: day)
+
+                    ProgressTrack(
+                        value: Double(activeMinutes(for: day)),
+                        maxValue: Double(maxMinutes),
+                        color: Color(nsColor: .systemPurple)
+                    )
+
+                    Text(StatisticsDurationFormatter.string(from: day.activeDuration))
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .frame(width: 52, alignment: .trailing)
+
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(Color(nsColor: .systemGreen))
+                            .frame(width: 7, height: 7)
+                        Text(StatisticsDurationFormatter.string(from: day.productiveDuration))
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                    }
+                    .frame(width: 62, alignment: .trailing)
+                }
+                .loopHelp("\(StatisticsDurationFormatter.string(from: day.productiveDuration)) productive of \(StatisticsDurationFormatter.string(from: day.activeDuration)) active")
+            }
+        }
+    }
+
+    private func activeMinutes(for day: WeekSummaryDay) -> Int {
+        Int(ceil(day.activeDuration / 60))
+    }
+
+    private func dayLabel(for day: WeekSummaryDay) -> some View {
+        Text(StatisticsDateFormatter.weekday.string(from: day.date))
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(width: 32, alignment: .leading)
+    }
+}
+
 private struct ProgressTrack: View {
     let value: Double
     let maxValue: Double
@@ -1911,6 +2974,258 @@ private enum StatisticsDurationFormatter {
     }
 }
 
+private struct RoutineEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: RoutineBlock
+    @State private var scheduleHour = 10
+    @State private var scheduleMinute = 0
+
+    private let isNew: Bool
+    let onChooseApplication: () -> LinkedApp?
+    let onSave: (RoutineBlock) -> Void
+
+    init(routine: RoutineBlock?, onChooseApplication: @escaping () -> LinkedApp?, onSave: @escaping (RoutineBlock) -> Void) {
+        _draft = State(initialValue: routine ?? RoutineBlock(title: ""))
+        let firstScheduleTime = routine?.scheduleTimes.sorted().first
+        _scheduleHour = State(initialValue: firstScheduleTime?.hour ?? 10)
+        _scheduleMinute = State(initialValue: firstScheduleTime?.minute ?? 0)
+        self.isNew = routine == nil
+        self.onChooseApplication = onChooseApplication
+        self.onSave = onSave
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text(isNew ? "New Routine" : "Routine Details")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+            }
+
+            routineEditorSection("Title") {
+                TextField("Routine name", text: $draft.title)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            routineEditorSection("Application") {
+                HStack(spacing: 8) {
+                    Label(draft.linkedApp?.name ?? "No app selected", systemImage: "app.dashed")
+                        .lineLimit(1)
+                        .foregroundStyle(draft.linkedApp == nil ? .secondary : .primary)
+
+                    Spacer()
+
+                    if draft.linkedApp != nil {
+                        Button {
+                            draft.linkedApp = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .buttonStyle(.borderless)
+                        .loopHelp("Clear selected app")
+                    }
+
+                    Button("Choose") {
+                        chooseApplication()
+                    }
+                }
+
+                LazyVGrid(columns: popularApplicationColumns, spacing: 6) {
+                    ForEach(PopularApplication.allCases) { app in
+                        Button {
+                            draft.linkedApp = app.linkedApp
+                        } label: {
+                            Text(app.title)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+
+            routineEditorSection("Cadence") {
+                Stepper(value: routineCadenceBinding, in: 1...LoopCadence.maxLoops, step: 1) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "repeat")
+                            .foregroundStyle(.secondary)
+                        Text(draft.cadence.title)
+                            .monospacedDigit()
+                    }
+                }
+            }
+
+            routineEditorSection("Time block") {
+                Stepper(value: $draft.durationMinutes, in: 1...240, step: 1) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "timer")
+                            .foregroundStyle(.secondary)
+                        Text("\(draft.durationMinutes) \(draft.durationMinutes == 1 ? "minute" : "minutes")")
+                            .monospacedDigit()
+                    }
+                }
+            }
+
+            routineEditorSection("Schedule") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Stepper(value: $scheduleHour, in: 0...23, step: 1) {
+                            Text(String(format: "%02d", scheduleHour))
+                                .monospacedDigit()
+                                .frame(width: 26, alignment: .leading)
+                        }
+                        .frame(width: 112)
+
+                        Stepper(value: $scheduleMinute, in: 0...59, step: 5) {
+                            Text(String(format: "%02d", scheduleMinute))
+                                .monospacedDigit()
+                                .frame(width: 26, alignment: .leading)
+                        }
+                        .frame(width: 112)
+
+                        Button {
+                            addScheduleTime(hour: scheduleHour, minute: scheduleMinute)
+                        } label: {
+                            Label("Add", systemImage: "plus")
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("10:00") {
+                            addScheduleTime(hour: 10, minute: 0)
+                        }
+                        .controlSize(.small)
+
+                        Button("14:00") {
+                            addScheduleTime(hour: 14, minute: 0)
+                        }
+                        .controlSize(.small)
+
+                        Button("Clear") {
+                            draft.scheduleTimes = []
+                            draft.lastCompletedScheduledAt = nil
+                        }
+                        .controlSize(.small)
+                        .disabled(draft.scheduleTimes.isEmpty)
+                    }
+
+                    if !draft.scheduleTimes.isEmpty {
+                        LazyVGrid(columns: scheduleColumns, alignment: .leading, spacing: 6) {
+                            ForEach(draft.scheduleTimes.sorted()) { scheduleTime in
+                                HStack(spacing: 5) {
+                                    Text(String(format: "%02d:%02d", scheduleTime.hour, scheduleTime.minute))
+                                        .monospacedDigit()
+                                    Button {
+                                        removeScheduleTime(scheduleTime)
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .loopHelp("Remove time")
+                                }
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 4)
+                                .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
+                            }
+                        }
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Enabled", isOn: $draft.isEnabled)
+                    .toggleStyle(.checkbox)
+                Toggle("Counts as productive time", isOn: $draft.countsAsProductive)
+                    .toggleStyle(.checkbox)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    dismiss()
+                }
+                Button("Save") {
+                    save()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.return, modifiers: [])
+                .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+        .onSubmit(save)
+    }
+
+    private func save() {
+        guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        draft.durationMinutes = min(max(draft.durationMinutes, 1), 240)
+        draft.scheduleTimes = Array(Set(draft.scheduleTimes)).sorted()
+        onSave(draft)
+        dismiss()
+    }
+
+    private func chooseApplication() {
+        if let linkedApp = onChooseApplication() {
+            draft.linkedApp = linkedApp
+        }
+    }
+
+    private func routineEditorSection<Content: View>(
+        _ title: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            content()
+        }
+    }
+
+    private var popularApplicationColumns: [GridItem] {
+        [
+            GridItem(.flexible(), spacing: 6),
+            GridItem(.flexible(), spacing: 6)
+        ]
+    }
+
+    private var scheduleColumns: [GridItem] {
+        [
+            GridItem(.adaptive(minimum: 78), spacing: 6)
+        ]
+    }
+
+    private var routineCadenceBinding: Binding<Int> {
+        Binding(
+            get: {
+                draft.cadence.rawValue
+            },
+            set: { cadence in
+                draft.cadence = LoopCadence(rawValue: cadence)
+            }
+        )
+    }
+
+    private func addScheduleTime(hour: Int, minute: Int) {
+        let scheduleTime = DailyScheduleTime(hour: hour, minute: minute)
+        if !draft.scheduleTimes.contains(scheduleTime) {
+            draft.scheduleTimes.append(scheduleTime)
+            draft.scheduleTimes.sort()
+            draft.lastCompletedScheduledAt = nil
+        }
+    }
+
+    private func removeScheduleTime(_ scheduleTime: DailyScheduleTime) {
+        draft.scheduleTimes.removeAll { $0 == scheduleTime }
+        draft.lastCompletedScheduledAt = nil
+    }
+}
+
 private struct TaskEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: TaskStore
@@ -1979,6 +3294,28 @@ private struct TaskEditorView: View {
                 }
             }
 
+            taskEditorSection("Cadence") {
+                Stepper(value: taskCadenceBinding, in: 1...LoopCadence.maxLoops, step: 1) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "repeat")
+                            .foregroundStyle(.secondary)
+                        Text(draft.cadence.title)
+                            .monospacedDigit()
+                    }
+                }
+            }
+
+            taskEditorSection("Iteration timer") {
+                Stepper(value: iterationTimerMinutesBinding, in: 0...240, step: 1) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "timer")
+                            .foregroundStyle(.secondary)
+                        Text(iterationTimerText)
+                            .monospacedDigit()
+                    }
+                }
+            }
+
             taskEditorSection("Schedule") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle("Scheduled", isOn: scheduledTaskBinding)
@@ -2008,29 +3345,6 @@ private struct TaskEditorView: View {
                             }
                             .controlSize(.small)
                         }
-                    }
-                }
-            }
-
-            if draft.scheduledFor == nil {
-                taskEditorSection("Cadence") {
-                    Picker("", selection: $draft.cadence) {
-                        ForEach(LoopCadence.allCases) { cadence in
-                            Text(cadence.compactTitle).tag(cadence)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-            }
-
-            taskEditorSection("Iteration timer") {
-                Stepper(value: iterationTimerMinutesBinding, in: 0...240, step: 1) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "timer")
-                            .foregroundStyle(.secondary)
-                        Text(iterationTimerText)
-                            .monospacedDigit()
                     }
                 }
             }
@@ -2097,8 +3411,6 @@ private struct TaskEditorView: View {
             set: { isScheduled in
                 if isScheduled {
                     draft.scheduledFor = draft.scheduledFor ?? scheduledDate(daysFromToday: 1, hour: 9, minute: 0)
-                    draft.doneThisLoop = false
-                    draft.lastCompletedLoop = nil
                 } else {
                     draft.scheduledFor = nil
                 }
@@ -2113,8 +3425,6 @@ private struct TaskEditorView: View {
             },
             set: { date in
                 draft.scheduledFor = date
-                draft.doneThisLoop = false
-                draft.lastCompletedLoop = nil
             }
         )
     }
@@ -2129,6 +3439,17 @@ private struct TaskEditorView: View {
                 draft.iterationTimerMinutes = clampedMinutes == 0 ? nil : clampedMinutes
                 draft.iterationTimerStartedAt = nil
                 draft.iterationTimerStartedLoop = nil
+            }
+        )
+    }
+
+    private var taskCadenceBinding: Binding<Int> {
+        Binding(
+            get: {
+                draft.cadence.rawValue
+            },
+            set: { cadence in
+                draft.cadence = LoopCadence(rawValue: cadence)
             }
         )
     }
@@ -2215,13 +3536,13 @@ private struct ShortcutSettingsView: View {
                 )
 
                 shortcutRecorder(
-                    title: "Done focused task",
+                    title: "Complete current item",
                     shortcut: store.doneShortcut,
                     onRecord: store.applyDoneShortcut
                 )
 
                 shortcutRecorder(
-                    title: "Quick add to backlog",
+                    title: "Quick add to Later",
                     shortcut: store.quickAddShortcut,
                     onRecord: store.applyQuickAddShortcut
                 )

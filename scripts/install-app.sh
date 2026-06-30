@@ -2,19 +2,25 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_NAME="Loop.app"
-SOURCE_APP="$ROOT/dist/$APP_NAME"
+APP_NAME="${APP_NAME:-Loop}"
+EXECUTABLE_NAME="${EXECUTABLE_NAME:-$APP_NAME}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-local.loop.menubar}"
+AGENT_LABEL="${AGENT_LABEL:-$BUNDLE_IDENTIFIER}"
+APP_BUNDLE="$APP_NAME.app"
+SOURCE_APP="$ROOT/dist/$APP_BUNDLE"
 INSTALL_DIR="$HOME/Applications"
-INSTALLED_APP="$INSTALL_DIR/$APP_NAME"
-AGENT_LABEL="local.loop.menubar"
+INSTALLED_APP="$INSTALL_DIR/$APP_BUNDLE"
 AGENT_PLIST="$HOME/Library/LaunchAgents/$AGENT_LABEL.plist"
-EXECUTABLE="$INSTALLED_APP/Contents/MacOS/Loop"
+EXECUTABLE="$INSTALLED_APP/Contents/MacOS/$EXECUTABLE_NAME"
 GUI_DOMAIN="gui/$(id -u)"
 
+APP_NAME="$APP_NAME" \
+EXECUTABLE_NAME="$EXECUTABLE_NAME" \
+BUNDLE_IDENTIFIER="$BUNDLE_IDENTIFIER" \
 "$ROOT/scripts/build-app.sh"
 
 launchctl bootout "$GUI_DOMAIN" "$AGENT_PLIST" >/dev/null 2>&1 || true
-pkill -x Loop >/dev/null 2>&1 || true
+pkill -x "$EXECUTABLE_NAME" >/dev/null 2>&1 || true
 
 mkdir -p "$INSTALL_DIR" "$HOME/Library/LaunchAgents"
 rm -rf "$INSTALLED_APP"
@@ -38,9 +44,9 @@ cat > "$AGENT_PLIST" <<PLIST
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>StandardOutPath</key>
-  <string>/tmp/loop.out.log</string>
+  <string>/tmp/$AGENT_LABEL.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/tmp/loop.err.log</string>
+  <string>/tmp/$AGENT_LABEL.err.log</string>
 </dict>
 </plist>
 PLIST
