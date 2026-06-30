@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP="$ROOT/dist/Loop.app"
+APP_NAME="${APP_NAME:-Loop}"
+EXECUTABLE_NAME="${EXECUTABLE_NAME:-$APP_NAME}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-local.loop.menubar}"
+APP="$ROOT/dist/$APP_NAME.app"
 CONTENTS="$APP/Contents"
 MACOS="$CONTENTS/MacOS"
 RESOURCES="$CONTENTS/Resources"
@@ -14,10 +17,10 @@ if [[ -d "$APP" ]]; then
 fi
 
 mkdir -p "$MACOS" "$RESOURCES"
-cp "$ROOT/.build/release/Loop" "$MACOS/Loop"
-chmod +x "$MACOS/Loop"
+cp "$ROOT/.build/release/Loop" "$MACOS/$EXECUTABLE_NAME"
+chmod +x "$MACOS/$EXECUTABLE_NAME"
 
-cat > "$CONTENTS/Info.plist" <<'PLIST'
+cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -25,13 +28,15 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>Loop</string>
+  <string>$EXECUTABLE_NAME</string>
   <key>CFBundleIdentifier</key>
-  <string>local.loop.menubar</string>
+  <string>$BUNDLE_IDENTIFIER</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
   <key>CFBundleName</key>
-  <string>Loop</string>
+  <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

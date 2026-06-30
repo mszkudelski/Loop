@@ -24,6 +24,7 @@ private enum HotKeyIdentifier {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = TaskStore()
+    private let meetingMonitor = MeetingMonitor()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
     private var hotKeyManager: HotKeyManager?
@@ -45,14 +46,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureHotKey()
         configureNotifications()
         configureOutsideClickHandling()
+        configureMeetingMonitor()
         configureStatusTitleUpdates()
+        store.resumeAfterSleepIfNeeded()
+        store.startActiveSession()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        store.endActiveSession()
         NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let globalMouseDownMonitor {
             NSEvent.removeMonitor(globalMouseDownMonitor)
         }
+        meetingMonitor.stop()
         dismissFocusBanner()
     }
 
@@ -82,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .environmentObject(store)
 
         popover.contentSize = NSSize(width: 420, height: 540)
-        popover.behavior = .transient
+        popover.behavior = .applicationDefined
         popover.contentViewController = NSHostingController(rootView: rootView)
     }
 
@@ -123,10 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerDoneHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.markFocusedTaskDone) { [weak self] in
-            guard let self else { return }
-            if self.store.markFocusedTaskDone(openNextFocusedApp: true) {
-                self.showFocusBanner()
-            }
+            self?.completeCurrentFocus()
         }
     }
 
@@ -154,6 +158,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .loopShouldClosePopover,
             object: nil
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWorkspaceWillSleep),
+            name: NSWorkspace.willSleepNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWorkspaceDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+    }
+
+    @objc private func handleWorkspaceWillSleep(_ notification: Notification) {
+        store.prepareForSleep()
+    }
+
+    @objc private func handleWorkspaceDidWake(_ notification: Notification) {
+        store.resumeAfterSleepIfNeeded()
+        store.startActiveSession()
     }
 
     private func configureOutsideClickHandling() {
@@ -164,6 +189,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.closePopover()
             }
         }
+    }
+
+    private func configureMeetingMonitor() {
+        meetingMonitor.onMeetingStateChange = { [weak self] isActive in
+            self?.store.setMeetingActive(isActive)
+        }
+        meetingMonitor.start()
     }
 
     private func configureStatusTitleUpdates() {
@@ -223,9 +255,192 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appNameItem.isEnabled = false
         menu.addItem(appNameItem)
         menu.addItem(.separator())
+        if store.isInMeeting {
+            let meetingItem = NSMenuItem(title: store.meetingTimerText ?? "In meeting", action: nil, keyEquivalent: "")
+            meetingItem.isEnabled = false
+            menu.addItem(meetingItem)
+            menu.addItem(NSMenuItem(title: "End meeting mode", action: #selector(endMeetingModeFromStatusMenu), keyEquivalent: ""))
+            menu.addItem(.separator())
+        }
+        if store.isInRoutine {
+            let routineItem = NSMenuItem(title: store.routineTimerText ?? "In routine", action: nil, keyEquivalent: "")
+            routineItem.isEnabled = false
+            menu.addItem(routineItem)
+            menu.addItem(NSMenuItem(title: "End routine", action: #selector(endRoutineFromStatusMenu), keyEquivalent: ""))
+            menu.addItem(.separator())
+        }
+
+        addFocusedTaskItems(to: menu)
+
         menu.addItem(NSMenuItem(title: "Quit \(appDisplayName)", action: #selector(quitFromStatusMenu), keyEquivalent: "q"))
 
         menu.popUp(positioning: appNameItem, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
+    }
+
+    private func addFocusedTaskItems(to menu: NSMenu) {
+        guard let task = store.focusedTask else {
+            let noTaskItem = NSMenuItem(title: "No current task", action: nil, keyEquivalent: "")
+            noTaskItem.isEnabled = false
+            menu.addItem(noTaskItem)
+            menu.addItem(.separator())
+            return
+        }
+
+        let taskTitleItem = NSMenuItem(title: truncatedMenuBarTitle(task.title), action: nil, keyEquivalent: "")
+        taskTitleItem.isEnabled = false
+        menu.addItem(taskTitleItem)
+
+        menu.addItem(taskMenuItem(title: "Done", action: #selector(markCurrentTaskDoneFromStatusMenu), imageName: "checkmark.circle"))
+
+        if task.iterationTimerMinutes != nil, !task.doneThisLoop, !task.finished, !task.isBacklog {
+            let extendMenu = NSMenu()
+            extendMenu.addItem(taskMenuItem(title: "2 minutes", action: #selector(extendCurrentTaskTwoMinutesFromStatusMenu), imageName: "plus.circle"))
+            extendMenu.addItem(taskMenuItem(title: "5 minutes", action: #selector(extendCurrentTaskFiveMinutesFromStatusMenu), imageName: "plus.circle"))
+
+            let extendItem = NSMenuItem(title: "Extend timer", action: nil, keyEquivalent: "")
+            extendItem.image = menuImage("timer")
+            extendItem.submenu = extendMenu
+            menu.addItem(extendItem)
+        }
+
+        if store.isSnoozed(task) {
+            menu.addItem(taskMenuItem(title: "Unsnooze", action: #selector(unsnoozeCurrentTaskFromStatusMenu), imageName: "clock.arrow.circlepath"))
+        } else {
+            menu.addItem(taskMenuItem(
+                title: task.doneThisLoop ? "Snooze Next Iterations" : "Snooze 30 minutes",
+                action: #selector(snoozeCurrentTaskThirtyMinutesFromStatusMenu),
+                imageName: "clock"
+            ))
+
+            let snoozeMenu = NSMenu()
+            for preset in SnoozePreset.secondaryOptions {
+                let item = NSMenuItem(title: preset.title, action: #selector(snoozeCurrentTaskFromStatusMenu(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = preset.minutes
+                item.image = menuImage(preset.systemImage)
+                snoozeMenu.addItem(item)
+            }
+            snoozeMenu.addItem(.separator())
+            snoozeMenu.addItem(taskMenuItem(title: "Move to backlog", action: #selector(moveCurrentTaskToBacklogFromStatusMenu), imageName: "tray.and.arrow.down"))
+
+            let snoozeItem = NSMenuItem(title: "Snooze for...", action: nil, keyEquivalent: "")
+            snoozeItem.image = menuImage("clock.badge.questionmark")
+            snoozeItem.submenu = snoozeMenu
+            menu.addItem(snoozeItem)
+        }
+
+        menu.addItem(.separator())
+        menu.addItem(taskMenuItem(title: "Edit", action: #selector(editCurrentTaskFromStatusMenu), imageName: "pencil"))
+        menu.addItem(taskMenuItem(
+            title: task.isPriority ? "Remove Priority" : "Mark Priority",
+            action: #selector(toggleCurrentTaskPriorityFromStatusMenu),
+            imageName: task.isPriority ? "star.slash" : "star"
+        ))
+        menu.addItem(taskMenuItem(title: "Move to Backlog", action: #selector(moveCurrentTaskToBacklogFromStatusMenu), imageName: "tray.and.arrow.down"))
+        menu.addItem(taskMenuItem(title: "Finish", action: #selector(finishCurrentTaskFromStatusMenu), imageName: "checkmark.seal"))
+        menu.addItem(taskMenuItem(title: "Delete", action: #selector(deleteCurrentTaskFromStatusMenu), imageName: "trash"))
+        menu.addItem(.separator())
+    }
+
+    private func taskMenuItem(title: String, action: Selector, imageName: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = menuImage(imageName)
+        return item
+    }
+
+    private func menuImage(_ systemName: String) -> NSImage? {
+        let image = NSImage(systemSymbolName: systemName, accessibilityDescription: nil)
+        image?.isTemplate = true
+        return image
+    }
+
+    @objc private func endMeetingModeFromStatusMenu(_ sender: Any?) {
+        meetingMonitor.suppressCurrentMeetingUntilInactive()
+        store.endMeetingManually()
+    }
+
+    @objc private func endRoutineFromStatusMenu(_ sender: Any?) {
+        store.endRoutineBlock()
+    }
+
+    @objc private func markCurrentTaskDoneFromStatusMenu(_ sender: Any?) {
+        completeCurrentFocus()
+    }
+
+    private func completeCurrentFocus() {
+        if store.isInRoutine {
+            store.endRoutineBlock()
+            return
+        }
+
+        if store.isOnBreak {
+            store.endBreak()
+            return
+        }
+
+        if store.markFocusedTaskDone(openNextFocusedApp: true) {
+            showFocusBanner()
+        }
+    }
+
+    @objc private func extendCurrentTaskTwoMinutesFromStatusMenu(_ sender: Any?) {
+        extendCurrentTask(by: 2)
+    }
+
+    @objc private func extendCurrentTaskFiveMinutesFromStatusMenu(_ sender: Any?) {
+        extendCurrentTask(by: 5)
+    }
+
+    @objc private func snoozeCurrentTaskThirtyMinutesFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.snooze(task, minutes: 30)
+    }
+
+    @objc private func snoozeCurrentTaskFromStatusMenu(_ sender: NSMenuItem) {
+        guard
+            let minutes = sender.representedObject as? Int,
+            let task = store.focusedTask
+        else {
+            return
+        }
+        store.snooze(task, minutes: minutes)
+    }
+
+    @objc private func unsnoozeCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.unsnooze(task)
+    }
+
+    @objc private func editCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        showPopover()
+        NotificationCenter.default.post(name: .loopShouldEditTask, object: task.id)
+    }
+
+    @objc private func toggleCurrentTaskPriorityFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.togglePriority(task)
+    }
+
+    @objc private func moveCurrentTaskToBacklogFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.moveToBacklog(task)
+    }
+
+    @objc private func finishCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.finish(task)
+    }
+
+    @objc private func deleteCurrentTaskFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.delete(task)
+    }
+
+    private func extendCurrentTask(by minutes: Int) {
+        guard let task = store.focusedTask else { return }
+        store.extendIterationTimer(for: task, by: minutes)
     }
 
     @objc private func quitFromStatusMenu(_ sender: Any?) {
@@ -272,10 +487,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusItemTitle() {
         guard let button = statusItem?.button else { return }
-        let title = store.breakTimerText ?? menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
+        let title = store.meetingTimerText
+            ?? store.breakTimerText
+            ?? store.routineTimerText
+            ?? menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
         button.title = title
         button.imagePosition = title.isEmpty ? .imageOnly : .imageLeft
-        button.toolTip = store.breakTimerText ?? menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
+        button.toolTip = store.meetingTimerText
+            ?? store.breakTimerText
+            ?? store.routineTimerText
+            ?? menuBarTooltip(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
     }
 
     private func truncatedMenuBarTitle(_ title: String?) -> String {
@@ -296,13 +517,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trimmedTitle = taskTitle?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let title = trimmedTitle.isEmpty ? "Open" : trimmedTitle
         guard let timerText else { return title }
-        return "\(title) · \(timerText) left"
+        let timerSuffix = timerText.hasPrefix("-") ? "over" : "left"
+        return "\(title) · \(timerText) \(timerSuffix)"
     }
 
     private func showPopover() {
         guard let button = statusItem?.button else { return }
         NSApp.activate(ignoringOtherApps: true)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            self.popover.contentViewController?.view.window?.makeKey()
+        }
     }
 
     private func showQuickAddWindow() {
@@ -345,11 +572,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showFocusBanner() {
-        let bannerState = FocusBannerState(task: store.focusedTask)
+        let bannerState = FocusBannerState(task: store.focusedTask, routine: store.activeRoutineBlock)
         showBanner(state: bannerState) { [weak self] in
             guard let self else { return }
             if let focusedTask = self.store.focusedTask {
                 self.store.openLinkedApp(for: focusedTask)
+            } else if let activeRoutineBlock = self.store.activeRoutineBlock {
+                self.store.openLinkedApp(for: activeRoutineBlock)
             }
             self.dismissFocusBanner()
         }
@@ -692,7 +921,7 @@ private struct FocusBannerState {
         self.isClickable = isClickable
     }
 
-    init(task: LoopTask?) {
+    init(task: LoopTask?, routine: RoutineBlock? = nil) {
         if let task {
             title = "Focus"
             subtitle = [
@@ -706,6 +935,19 @@ private struct FocusBannerState {
             .joined(separator: " · ")
             systemImage = "scope"
             isClickable = task.linkedApp != nil
+        } else if let routine {
+            title = "Routine"
+            subtitle = [
+                routine.title,
+                routine.linkedApp?.name
+            ]
+            .compactMap { value in
+                let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmedValue?.isEmpty == false ? trimmedValue : nil
+            }
+            .joined(separator: " · ")
+            systemImage = "clock.badge.checkmark"
+            isClickable = routine.linkedApp != nil
         } else {
             title = "Iteration complete"
             subtitle = "No task is waiting"

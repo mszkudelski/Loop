@@ -1,0 +1,111 @@
+<svg width="980" height="760" viewBox="0 0 980 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="980" height="760" fill="#F5F4F0"/>
+
+  <g filter="url(#panelShadow)">
+    <rect x="92" y="40" width="440" height="680" rx="18" fill="#FAF9F6"/>
+    <rect x="92.5" y="40.5" width="439" height="679" rx="17.5" stroke="#DCD8CF"/>
+  </g>
+
+  <rect x="92" y="40" width="440" height="96" rx="18" fill="#FFFFFF"/>
+  <path d="M92 118H532" stroke="#E3DFD6"/>
+
+  <text x="116" y="78" fill="#22211E" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', Arial, sans-serif" font-size="24" font-weight="740">Loop</text>
+  <text x="116" y="102" fill="#77736A" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13" font-weight="620">Iteration 12</text>
+
+  <rect x="258" y="62" width="68" height="30" rx="15" fill="#EBF5EF"/>
+  <text x="292" y="82" fill="#2D7650" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="760" text-anchor="middle">3 loops</text>
+
+  <rect x="334" y="62" width="70" height="30" rx="15" fill="#EEF3FF"/>
+  <text x="369" y="82" fill="#4168B0" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="760" text-anchor="middle">2 done</text>
+
+  <rect x="412" y="62" width="82" height="30" rx="15" fill="#F2F0EA"/>
+  <text x="453" y="82" fill="#55514A" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="760" text-anchor="middle">78% focus</text>
+
+  <text x="116" y="170" fill="#77736A" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="11" font-weight="820" letter-spacing="1.1">OPEN</text>
+  <rect x="464" y="150" width="44" height="28" rx="14" fill="#F0EEE8" stroke="#DAD5CC"/>
+  <text x="486" y="169" fill="#656057" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="720" text-anchor="middle">4</text>
+
+  <rect x="116" y="188" width="392" height="60" rx="10" fill="#FFFFFF" stroke="#E1DDD4"/>
+  <circle cx="143" cy="218" r="10" stroke="#A7A198" stroke-width="2"/>
+  <text x="166" y="215" fill="#24231F" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="680">Write proposal draft</text>
+  <text x="166" y="235" fill="#7A756D" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="560">Safari · 2m</text>
+  <circle cx="479" cy="218" r="15" fill="#F5F3EE"/>
+  <circle cx="473" cy="218" r="2" fill="#77736A"/>
+  <circle cx="479" cy="218" r="2" fill="#77736A"/>
+  <circle cx="485" cy="218" r="2" fill="#77736A"/>
+
+  <rect x="116" y="256" width="392" height="60" rx="10" fill="#FFFFFF" stroke="#E1DDD4"/>
+  <circle cx="143" cy="286" r="10" stroke="#A7A198" stroke-width="2"/>
+  <text x="166" y="283" fill="#24231F" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="680">Review notes</text>
+  <text x="166" y="303" fill="#7A756D" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="560">Every loop</text>
+
+  <rect x="116" y="324" width="392" height="60" rx="10" fill="#FFFFFF" stroke="#E1DDD4"/>
+  <circle cx="143" cy="354" r="10" stroke="#A7A198" stroke-width="2"/>
+  <text x="166" y="351" fill="#24231F" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="680">Send invoice</text>
+  <text x="166" y="371" fill="#7A756D" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="560">Due this iteration</text>
+
+  <rect x="116" y="392" width="392" height="60" rx="10" fill="#F7FBF9" stroke="#D7E8DE"/>
+  <circle cx="143" cy="422" r="10" fill="#E5F4EC" stroke="#6DA88A" stroke-width="2"/>
+  <text x="166" y="419" fill="#24231F" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="680">Refill water</text>
+  <text x="166" y="439" fill="#5C7568" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="620">Routine · 5m</text>
+  <rect x="434" y="408" width="48" height="28" rx="14" fill="#E4F2EA"/>
+  <text x="458" y="427" fill="#377E60" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="760" text-anchor="middle">Start</text>
+
+  <rect x="116" y="480" width="392" height="48" rx="10" fill="#FFFFFF" stroke="#E1DDD4"/>
+  <path d="M138 498L146 506L138 514" stroke="#77736A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="166" y="510" fill="#3B3934" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="14" font-weight="730">Done this iteration</text>
+  <text x="480" y="510" fill="#77736A" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13" font-weight="700" text-anchor="end">2</text>
+
+  <rect x="116" y="536" width="392" height="48" rx="10" fill="#FFFFFF" stroke="#E1DDD4"/>
+  <path d="M138 554L146 562L138 570" stroke="#77736A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="166" y="566" fill="#3B3934" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="14" font-weight="730">Future</text>
+  <text x="480" y="566" fill="#77736A" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13" font-weight="700" text-anchor="end">6</text>
+
+  <rect x="116" y="604" width="392" height="48" rx="10" fill="#F0EEE8" stroke="#DAD5CC"/>
+  <text x="140" y="634" fill="#3B3934" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="14" font-weight="760">Later</text>
+  <text x="480" y="634" fill="#77736A" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13" font-weight="700" text-anchor="end">5 items</text>
+
+  <rect x="92" y="664" width="440" height="56" rx="18" fill="#FFFFFF"/>
+  <path d="M92 664H532" stroke="#E3DFD6"/>
+  <rect x="116" y="679" width="282" height="28" rx="8" fill="#F7F6F2" stroke="#DCD8CF"/>
+  <text x="132" y="698" fill="#99948B" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13" font-weight="610">New task...</text>
+  <rect x="408" y="679" width="42" height="28" rx="8" fill="#2D7650"/>
+  <text x="429" y="698" fill="#FFFFFF" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="760" text-anchor="middle">Now</text>
+  <rect x="456" y="679" width="52" height="28" rx="8" fill="#F0EEE8" stroke="#DAD5CC"/>
+  <text x="482" y="698" fill="#4D4942" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="12" font-weight="760" text-anchor="middle">Later</text>
+
+  <g>
+    <line x1="552" y1="76" x2="624" y2="76" stroke="#B9B3A8" stroke-width="2"/>
+    <circle cx="630" cy="76" r="4" fill="#B9B3A8"/>
+    <text x="650" y="70" fill="#3A3833" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="760">Header = daily pulse</text>
+    <text x="650" y="92" fill="#706B62" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13">Loops, finished tasks, and productivity percentage.</text>
+
+    <line x1="552" y1="220" x2="624" y2="220" stroke="#B9B3A8" stroke-width="2"/>
+    <circle cx="630" cy="220" r="4" fill="#B9B3A8"/>
+    <text x="650" y="214" fill="#3A3833" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="760">No special current-task block</text>
+    <text x="650" y="236" fill="#706B62" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13">All open work stays in one calm scanable list.</text>
+
+    <line x1="552" y1="506" x2="624" y2="506" stroke="#B9B3A8" stroke-width="2"/>
+    <circle cx="630" cy="506" r="4" fill="#B9B3A8"/>
+    <text x="650" y="500" fill="#3A3833" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="760">Folded sections replace checkboxes</text>
+    <text x="650" y="522" fill="#706B62" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13">Done and Future are available without occupying attention.</text>
+
+    <line x1="552" y1="630" x2="624" y2="630" stroke="#B9B3A8" stroke-width="2"/>
+    <circle cx="630" cy="630" r="4" fill="#B9B3A8"/>
+    <text x="650" y="624" fill="#3A3833" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="15" font-weight="760">Later is lightweight storage</text>
+    <text x="650" y="646" fill="#706B62" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', Arial, sans-serif" font-size="13">Capture stays fast, but the main loop remains clean.</text>
+  </g>
+
+  <defs>
+    <filter id="panelShadow" x="70" y="22" width="484" height="724" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="4"/>
+      <feGaussianBlur stdDeviation="11"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.21 0 0 0 0 0.19 0 0 0 0 0.15 0 0 0 0.16 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow" result="shape"/>
+    </filter>
+  </defs>
+</svg>
