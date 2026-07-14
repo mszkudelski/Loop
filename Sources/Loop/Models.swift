@@ -221,6 +221,7 @@ struct RoutineBlock: Identifiable, Codable, Equatable {
     var isEnabled: Bool
     var scheduleTimes: [DailyScheduleTime]
     var lastCompletedScheduledAt: Date?
+    var snoozedUntil: Date?
     var lastCompletedLoop: Int?
     var sortOrder: Double
     var createdAt: Date
@@ -236,6 +237,7 @@ struct RoutineBlock: Identifiable, Codable, Equatable {
         isEnabled: Bool = true,
         scheduleTimes: [DailyScheduleTime] = [],
         lastCompletedScheduledAt: Date? = nil,
+        snoozedUntil: Date? = nil,
         lastCompletedLoop: Int? = nil,
         sortOrder: Double? = nil,
         createdAt: Date = Date(),
@@ -250,6 +252,7 @@ struct RoutineBlock: Identifiable, Codable, Equatable {
         self.isEnabled = isEnabled
         self.scheduleTimes = scheduleTimes
         self.lastCompletedScheduledAt = lastCompletedScheduledAt
+        self.snoozedUntil = snoozedUntil
         self.lastCompletedLoop = lastCompletedLoop
         self.sortOrder = sortOrder ?? createdAt.timeIntervalSinceReferenceDate
         self.createdAt = createdAt
@@ -266,6 +269,7 @@ struct RoutineBlock: Identifiable, Codable, Equatable {
         case isEnabled
         case scheduleTimes
         case lastCompletedScheduledAt
+        case snoozedUntil
         case lastCompletedLoop
         case sortOrder
         case createdAt
@@ -283,6 +287,7 @@ struct RoutineBlock: Identifiable, Codable, Equatable {
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
         scheduleTimes = try container.decodeIfPresent([DailyScheduleTime].self, forKey: .scheduleTimes) ?? []
         lastCompletedScheduledAt = try container.decodeIfPresent(Date.self, forKey: .lastCompletedScheduledAt)
+        snoozedUntil = try container.decodeIfPresent(Date.self, forKey: .snoozedUntil)
         lastCompletedLoop = try container.decodeIfPresent(Int.self, forKey: .lastCompletedLoop)
         createdAt = try container.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
         sortOrder = try container.decodeIfPresent(Double.self, forKey: .sortOrder) ?? createdAt.timeIntervalSinceReferenceDate
@@ -300,6 +305,7 @@ struct RoutineBlock: Identifiable, Codable, Equatable {
         try container.encode(isEnabled, forKey: .isEnabled)
         try container.encode(scheduleTimes, forKey: .scheduleTimes)
         try container.encodeIfPresent(lastCompletedScheduledAt, forKey: .lastCompletedScheduledAt)
+        try container.encodeIfPresent(snoozedUntil, forKey: .snoozedUntil)
         try container.encodeIfPresent(lastCompletedLoop, forKey: .lastCompletedLoop)
         try container.encode(sortOrder, forKey: .sortOrder)
         try container.encode(createdAt, forKey: .createdAt)
@@ -360,6 +366,20 @@ struct ActiveSession: Identifiable, Codable, Equatable {
 
     init(id: UUID = UUID(), startedAt: Date, endedAt: Date = Date()) {
         self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+}
+
+struct TaskFocusSession: Identifiable, Codable, Equatable {
+    var id: UUID
+    var taskID: UUID
+    var startedAt: Date
+    var endedAt: Date
+
+    init(id: UUID = UUID(), taskID: UUID, startedAt: Date, endedAt: Date = Date()) {
+        self.id = id
+        self.taskID = taskID
         self.startedAt = startedAt
         self.endedAt = endedAt
     }

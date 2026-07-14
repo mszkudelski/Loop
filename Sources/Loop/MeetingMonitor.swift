@@ -3,14 +3,16 @@ import CoreGraphics
 import Foundation
 
 @MainActor
-final class MeetingMonitor {
+final class MeetingMonitor: @unchecked Sendable {
     var onMeetingStateChange: ((Bool) -> Void)?
 
     private var timer: Timer?
+    private let evaluationQueue = DispatchQueue(label: "local.loop.meeting-monitor", qos: .utility)
     private var lastReportedState = false
     private var consecutiveDetectedState: Bool?
     private var consecutiveDetectionCount = 0
     private var isSuppressingCurrentMeeting = false
+    private var isEvaluating = false
 
     func start() {
         stop()
@@ -35,7 +37,19 @@ final class MeetingMonitor {
     }
 
     private func evaluate() {
-        let detectedState = Self.isZoomMeetingActive()
+        guard !isEvaluating else { return }
+        isEvaluating = true
+
+        evaluationQueue.async { [weak self] in
+            let detectedState = Self.isZoomMeetingActive()
+            DispatchQueue.main.async {
+                self?.handleDetectedState(detectedState)
+            }
+        }
+    }
+
+    private func handleDetectedState(_ detectedState: Bool) {
+        isEvaluating = false
         if isSuppressingCurrentMeeting {
             if detectedState {
                 return
@@ -58,12 +72,12 @@ final class MeetingMonitor {
         onMeetingStateChange?(detectedState)
     }
 
-    private static func isZoomMeetingActive() -> Bool {
+    private nonisolated static func isZoomMeetingActive() -> Bool {
         guard isZoomRunning else { return false }
         return hasZoomMeetingWindow || isZoomConferenceHostRunning
     }
 
-    private static var isZoomRunning: Bool {
+    private nonisolated static var isZoomRunning: Bool {
         NSWorkspace.shared.runningApplications.contains { app in
             let bundleIdentifier = app.bundleIdentifier?.lowercased() ?? ""
             let localizedName = app.localizedName?.lowercased() ?? ""
@@ -74,7 +88,7 @@ final class MeetingMonitor {
         }
     }
 
-    private static var isZoomConferenceHostRunning: Bool {
+    private nonisolated static var isZoomConferenceHostRunning: Bool {
         NSWorkspace.shared.runningApplications.contains { app in
             let bundleIdentifier = app.bundleIdentifier?.lowercased() ?? ""
             let localizedName = app.localizedName?.lowercased() ?? ""
@@ -85,7 +99,7 @@ final class MeetingMonitor {
         }
     }
 
-    private static var hasZoomMeetingWindow: Bool {
+    private nonisolated static var hasZoomMeetingWindow: Bool {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return false
@@ -102,7 +116,7 @@ final class MeetingMonitor {
         }
     }
 
-    private static func isMeetingWindowTitle(_ title: String) -> Bool {
+    private nonisolated static func isMeetingWindowTitle(_ title: String) -> Bool {
         let normalizedTitle = title.lowercased()
         guard !normalizedTitle.isEmpty else { return false }
 
