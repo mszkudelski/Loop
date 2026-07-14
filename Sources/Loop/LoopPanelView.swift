@@ -153,8 +153,14 @@ struct LoopPanelView: View {
             }
             footer
         }
-        .frame(width: 440)
-        .frame(minHeight: 560)
+        .frame(
+            minWidth: 440,
+            idealWidth: 520,
+            maxWidth: .infinity,
+            minHeight: 560,
+            idealHeight: 680,
+            maxHeight: .infinity
+        )
         .background(.regularMaterial)
         .sheet(item: $editingTask) { task in
             TaskEditorView(task: task, onChooseApplication: onChooseApplication) { updatedTask in
@@ -209,12 +215,6 @@ struct LoopPanelView: View {
                 return
             }
             editingTask = task
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .loopShouldCheckMorningOnboarding)) { _ in
-            showMorningOnboardingIfNeeded()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .loopPopoverWillClose)) { _ in
-            resetTransientPresentation()
         }
         .onAppear {
             showMorningOnboardingIfNeeded()
@@ -386,14 +386,6 @@ struct LoopPanelView: View {
         guard store.shouldShowMorningOnboarding else { return }
         guard !isShowingMorningOnboarding else { return }
         isShowingMorningOnboarding = true
-    }
-
-    private func resetTransientPresentation() {
-        editingTask = nil
-        isAddingDetailedTask = false
-        isShowingBacklog = false
-        isShowingSettings = false
-        isShowingMorningOnboarding = false
     }
 }
 

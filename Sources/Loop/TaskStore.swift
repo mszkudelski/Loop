@@ -3424,9 +3424,7 @@ private enum LoginLaunchAgent {
 
 extension Notification.Name {
     static let loopShouldClosePopover = Notification.Name("Loop.shouldClosePopover")
-    static let loopPopoverWillClose = Notification.Name("Loop.popoverWillClose")
     static let loopShouldEditTask = Notification.Name("Loop.shouldEditTask")
-    static let loopShouldCheckMorningOnboarding = Notification.Name("Loop.shouldCheckMorningOnboarding")
     static let loopFocusModeDidEnd = Notification.Name("Loop.focusModeDidEnd")
     static let loopFocusDidStart = Notification.Name("Loop.focusDidStart")
 }

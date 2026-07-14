@@ -54,13 +54,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyManager: HotKeyManager?
     private var globalMouseDownMonitor: Any?
     private var cancellables = Set<AnyCancellable>()
-    private var isChoosingApplication = false
     private var focusBannerWindow: NSPanel?
     private var focusBannerDismissWorkItem: DispatchWorkItem?
     private var timerExpirationContext: TimerExpirationContext?
     private var nextTimerExpirationBannerAt: Date?
     private var quickAddWindow: NSPanel?
     private var quickAddDraft = ""
+    private var taskManagerWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var instanceLock: SingleInstanceLock?
     private var activityGate = InteractiveActivityGate(
@@ -133,16 +133,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func configurePopover() {
-        let rootView = LoopPanelView(
-            onChooseApplication: { [weak self] in
-                self?.chooseApplication()
+        let rootView = TrayPanelView(
+            onPrimaryAction: { [weak self] in
+                self?.performTrayPrimaryAction()
+            },
+            onSelectTask: { [weak self] task in
+                self?.store.focus(task)
+                self?.closePopover()
+            },
+            onEditTask: { [weak self] task in
+                self?.showTaskEditor(task)
+            },
+            onOpenTaskManager: { [weak self] in
+                self?.showTaskManagerWindow()
+            },
+            onOpenSettings: { [weak self] in
+                self?.showSettingsWindow(initialSection: .general)
+            },
+            onOpenStats: { [weak self] in
+                self?.showSettingsWindow(initialSection: .stats)
             }
         )
         .environmentObject(store)
 
-        popover.contentSize = NSSize(width: 420, height: 540)
-        popover.behavior = .applicationDefined
-        popover.delegate = self
+        popover.contentSize = NSSize(width: 360, height: 310)
+        popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: rootView)
     }
 
@@ -398,7 +413,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        guard !isChoosingApplication else { return }
         closePopover()
     }
 
@@ -423,9 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func closePopover() {
-        guard !isChoosingApplication else { return }
         guard popover.isShown else { return }
-        NotificationCenter.default.post(name: .loopPopoverWillClose, object: nil)
         popover.performClose(nil)
     }
 
@@ -437,6 +449,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appNameItem = NSMenuItem(title: appDisplayName, action: nil, keyEquivalent: "")
         appNameItem.isEnabled = false
         menu.addItem(appNameItem)
+        menu.addItem(taskMenuItem(title: "Open Task Manager", action: #selector(showTaskManagerFromStatusMenu), imageName: "macwindow"))
         menu.addItem(.separator())
 
         addFocusedTaskItems(to: menu)
@@ -500,6 +513,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         completeCurrentFocus()
     }
 
+    private func performTrayPrimaryAction() {
+        if store.isInMeeting {
+            meetingMonitor.suppressCurrentMeetingUntilInactive()
+            store.endMeetingManually()
+            return
+        }
+
+        if store.isOnBreak {
+            store.endBreak()
+            return
+        }
+
+        if store.isInRoutine {
+            store.endRoutineBlock()
+            return
+        }
+
+        store.startBreak()
+    }
+
     private func completeCurrentFocus() {
         if store.isInRoutine {
             store.endRoutineBlock()
@@ -537,6 +570,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showSettingsWindow(initialSection: .stats)
     }
 
+    @objc private func showTaskManagerFromStatusMenu(_ sender: Any?) {
+        showTaskManagerWindow()
+    }
+
     @objc private func snoozeCurrentTaskThirtyMinutesFromStatusMenu(_ sender: Any?) {
         guard let task = store.focusedTask else { return }
         store.snooze(task, minutes: 30)
@@ -559,8 +596,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func editCurrentTaskFromStatusMenu(_ sender: Any?) {
         guard let task = store.focusedTask else { return }
-        showPopover()
-        NotificationCenter.default.post(name: .loopShouldEditTask, object: task.id)
+        showTaskEditor(task)
+    }
+
+    private func showTaskEditor(_ task: LoopTask) {
+        showTaskManagerWindow()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .loopShouldEditTask, object: task.id)
+        }
     }
 
     @objc private func toggleCurrentTaskPriorityFromStatusMenu(_ sender: Any?) {
@@ -599,14 +642,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func chooseApplication() -> LinkedApp? {
-        isChoosingApplication = true
-        let previousBehavior = popover.behavior
-        popover.behavior = .applicationDefined
-        defer {
-            popover.behavior = previousBehavior
-            isChoosingApplication = false
-        }
-
         let panel = NSOpenPanel()
         panel.title = "Choose Application"
         panel.prompt = "Choose"
@@ -677,13 +712,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem?.button else { return }
         NSApp.activate(ignoringOtherApps: true)
         store.refreshCurrentDate()
+        updatePopoverSize(for: button)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             NSApp.activate(ignoringOtherApps: true)
             self.popover.contentViewController?.view.window?.makeKey()
-            NotificationCenter.default.post(name: .loopShouldCheckMorningOnboarding, object: nil)
         }
+    }
+
+    private func updatePopoverSize(for button: NSStatusBarButton) {
+        let openTaskCount = store.currentLoopTasks.filter { !$0.doneThisLoop && !$0.finished }.count
+        let desiredHeight = CGFloat(275 + (max(openTaskCount, 1) * 35))
+        let availableHeight = (button.window?.screen?.visibleFrame.height ?? 800) - 96
+        popover.contentSize = NSSize(width: 360, height: min(desiredHeight, availableHeight))
+    }
+
+    private func showTaskManagerWindow() {
+        closePopover()
+        store.refreshCurrentDate()
+
+        let window: NSWindow
+        if let taskManagerWindow {
+            window = taskManagerWindow
+        } else {
+            window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 520, height: 680),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Loop"
+            window.contentMinSize = NSSize(width: 440, height: 560)
+            window.isReleasedWhenClosed = false
+            window.tabbingMode = .disallowed
+            window.contentViewController = NSHostingController(rootView: LoopPanelView(
+                onChooseApplication: { [weak self] in
+                    self?.chooseApplication()
+                }
+            )
+            .environmentObject(store))
+
+            let frameAutosaveName = "Loop.TaskManagerWindow"
+            if !window.setFrameUsingName(frameAutosaveName) {
+                window.center()
+            }
+            window.setFrameAutosaveName(frameAutosaveName)
+            taskManagerWindow = window
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
     }
 
     private func showQuickAddWindow() {
@@ -898,12 +978,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusBannerDismissWorkItem = nil
         focusBannerWindow?.close()
         focusBannerWindow = nil
-    }
-}
-
-extension AppDelegate: NSPopoverDelegate {
-    func popoverWillClose(_ notification: Notification) {
-        NotificationCenter.default.post(name: .loopPopoverWillClose, object: nil)
     }
 }
 
