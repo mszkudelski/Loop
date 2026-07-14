@@ -3,17 +3,22 @@ import CoreGraphics
 import Foundation
 
 @MainActor
-final class MeetingMonitor {
+final class MeetingMonitor: @unchecked Sendable {
     var onMeetingStateChange: ((Bool) -> Void)?
 
     private var timer: Timer?
+    private let evaluationQueue = DispatchQueue(label: "local.loop.meeting-monitor", qos: .utility)
     private var lastReportedState = false
     private var consecutiveDetectedState: Bool?
     private var consecutiveDetectionCount = 0
     private var isSuppressingCurrentMeeting = false
+    private var isEvaluating = false
+    private var evaluationGeneration = 0
 
     func start() {
         stop()
+        evaluationGeneration += 1
+        isEvaluating = false
         evaluate()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -27,6 +32,16 @@ final class MeetingMonitor {
         timer = nil
     }
 
+    func suspend() {
+        stop()
+        evaluationGeneration += 1
+        isEvaluating = false
+        lastReportedState = false
+        consecutiveDetectedState = nil
+        consecutiveDetectionCount = 0
+        isSuppressingCurrentMeeting = false
+    }
+
     func suppressCurrentMeetingUntilInactive() {
         isSuppressingCurrentMeeting = true
         lastReportedState = false
@@ -35,7 +50,21 @@ final class MeetingMonitor {
     }
 
     private func evaluate() {
-        let detectedState = Self.isZoomMeetingActive()
+        guard !isEvaluating else { return }
+        isEvaluating = true
+        let generation = evaluationGeneration
+
+        evaluationQueue.async { [weak self] in
+            let detectedState = Self.isZoomMeetingActive()
+            DispatchQueue.main.async {
+                guard let self, self.evaluationGeneration == generation else { return }
+                self.handleDetectedState(detectedState)
+            }
+        }
+    }
+
+    private func handleDetectedState(_ detectedState: Bool) {
+        isEvaluating = false
         if isSuppressingCurrentMeeting {
             if detectedState {
                 return
@@ -58,12 +87,12 @@ final class MeetingMonitor {
         onMeetingStateChange?(detectedState)
     }
 
-    private static func isZoomMeetingActive() -> Bool {
+    private nonisolated static func isZoomMeetingActive() -> Bool {
         guard isZoomRunning else { return false }
         return hasZoomMeetingWindow || isZoomConferenceHostRunning
     }
 
-    private static var isZoomRunning: Bool {
+    private nonisolated static var isZoomRunning: Bool {
         NSWorkspace.shared.runningApplications.contains { app in
             let bundleIdentifier = app.bundleIdentifier?.lowercased() ?? ""
             let localizedName = app.localizedName?.lowercased() ?? ""
@@ -74,7 +103,7 @@ final class MeetingMonitor {
         }
     }
 
-    private static var isZoomConferenceHostRunning: Bool {
+    private nonisolated static var isZoomConferenceHostRunning: Bool {
         NSWorkspace.shared.runningApplications.contains { app in
             let bundleIdentifier = app.bundleIdentifier?.lowercased() ?? ""
             let localizedName = app.localizedName?.lowercased() ?? ""
@@ -85,7 +114,7 @@ final class MeetingMonitor {
         }
     }
 
-    private static var hasZoomMeetingWindow: Bool {
+    private nonisolated static var hasZoomMeetingWindow: Bool {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
             return false
@@ -102,7 +131,7 @@ final class MeetingMonitor {
         }
     }
 
-    private static func isMeetingWindowTitle(_ title: String) -> Bool {
+    private nonisolated static func isMeetingWindowTitle(_ title: String) -> Bool {
         let normalizedTitle = title.lowercased()
         guard !normalizedTitle.isEmpty else { return false }
 

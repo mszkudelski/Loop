@@ -365,6 +365,20 @@ struct ActiveSession: Identifiable, Codable, Equatable {
     }
 }
 
+struct TaskFocusSession: Identifiable, Codable, Equatable {
+    var id: UUID
+    var taskID: UUID
+    var startedAt: Date
+    var endedAt: Date
+
+    init(id: UUID = UUID(), taskID: UUID, startedAt: Date, endedAt: Date = Date()) {
+        self.id = id
+        self.taskID = taskID
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+}
+
 struct TaskCompletionStat: Identifiable, Equatable {
     var id: UUID
     var title: String

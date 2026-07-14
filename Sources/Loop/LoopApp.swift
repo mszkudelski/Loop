@@ -1,7 +1,31 @@
 import AppKit
 import Combine
+import CoreGraphics
+import Darwin
 import SwiftUI
 import UniformTypeIdentifiers
+
+private final class SingleInstanceLock {
+    private let fileDescriptor: Int32
+
+    init?(bundleIdentifier: String) {
+        let safeIdentifier = bundleIdentifier.replacingOccurrences(of: "/", with: "_")
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(safeIdentifier).instance.lock")
+        let descriptor = open(lockURL.path, O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { return nil }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            close(descriptor)
+            return nil
+        }
+        fileDescriptor = descriptor
+    }
+
+    deinit {
+        flock(fileDescriptor, LOCK_UN)
+        close(fileDescriptor)
+    }
+}
 
 @main
 struct LoopMenuBarApp: App {
@@ -23,7 +47,7 @@ private enum HotKeyIdentifier {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let store = TaskStore()
+    private lazy var store = TaskStore()
     private let meetingMonitor = MeetingMonitor()
     private let popover = NSPopover()
     private var statusItem: NSStatusItem?
@@ -35,11 +59,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var focusBannerDismissWorkItem: DispatchWorkItem?
     private var timerExpirationContext: TimerExpirationContext?
     private var nextTimerExpirationBannerAt: Date?
-    private var breakExpirationContext: BreakExpirationContext?
     private var quickAddWindow: NSPanel?
     private var quickAddDraft = ""
+    private var settingsWindow: NSWindow?
+    private var instanceLock: SingleInstanceLock?
+    private var activityGate = InteractiveActivityGate(
+        powerAwake: true,
+        screenAwake: false,
+        sessionActive: false
+    )
+    private var didFinishLaunching = false
+    private var trackingIsInteractive = false
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        instanceLock = SingleInstanceLock(bundleIdentifier: Bundle.main.bundleIdentifier ?? "local.loop.menubar")
+        if instanceLock == nil {
+            NSApp.terminate(nil)
+        }
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard instanceLock != nil else { return }
         NSApp.setActivationPolicy(.accessory)
         configureStatusItem()
         configurePopover()
@@ -47,13 +87,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureNotifications()
         configureOutsideClickHandling()
         configureMeetingMonitor()
+        configureTrackingLifecycle()
         configureStatusTitleUpdates()
-        store.resumeAfterSleepIfNeeded()
-        store.startActiveSession()
+        activityGate = InteractiveActivityGate(
+            powerAwake: true,
+            screenAwake: Self.mainDisplayIsAwake,
+            sessionActive: Self.currentSessionIsActive
+        )
+        didFinishLaunching = true
+        reconcileInteractiveTracking()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        store.endActiveSession()
+        guard instanceLock != nil else { return }
+        store.suspendTracking()
+        store.flushPendingSave()
         NotificationCenter.default.removeObserver(self)
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         if let globalMouseDownMonitor {
@@ -61,6 +109,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         meetingMonitor.stop()
         dismissFocusBanner()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        noteInteractiveActivity()
     }
 
     private func configureStatusItem() {
@@ -90,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover.contentSize = NSSize(width: 420, height: 540)
         popover.behavior = .applicationDefined
+        popover.delegate = self
         popover.contentViewController = NSHostingController(rootView: rootView)
     }
 
@@ -117,25 +170,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.registerBreakHotKey(shortcut)
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-            self?.showPopover()
-        }
     }
 
     private func registerPopoverHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.togglePopover) { [weak self] in
+            self?.noteInteractiveActivity()
             self?.togglePopover(nil)
         }
     }
 
     private func registerDoneHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.markFocusedTaskDone) { [weak self] in
+            self?.noteInteractiveActivity()
             self?.completeCurrentFocus()
         }
     }
 
     private func registerQuickAddHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.quickAddTask) { [weak self] in
+            self?.noteInteractiveActivity()
             self?.showQuickAddWindow()
         }
     }
@@ -143,6 +196,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerBreakHotKey(_ shortcut: KeyboardShortcutSetting) {
         _ = hotKeyManager?.register(shortcut, id: HotKeyIdentifier.startBreak) { [weak self] in
             guard let self else { return }
+            self.noteInteractiveActivity()
             if self.store.isOnBreak {
                 self.store.endBreak()
             } else {
@@ -158,6 +212,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: .loopShouldClosePopover,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFocusModeDidEnd),
+            name: .loopFocusModeDidEnd,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleFocusDidStart),
+            name: .loopFocusDidStart,
+            object: nil
+        )
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(handleWorkspaceWillSleep),
@@ -170,15 +236,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleScreensDidSleep),
+            name: NSWorkspace.screensDidSleepNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleScreensDidWake),
+            name: NSWorkspace.screensDidWakeNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSessionDidResignActive),
+            name: NSWorkspace.sessionDidResignActiveNotification,
+            object: nil
+        )
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSessionDidBecomeActive),
+            name: NSWorkspace.sessionDidBecomeActiveNotification,
+            object: nil
+        )
     }
 
     @objc private func handleWorkspaceWillSleep(_ notification: Notification) {
-        store.prepareForSleep()
+        activityGate.systemWillSleep()
+        reconcileInteractiveTracking()
     }
 
     @objc private func handleWorkspaceDidWake(_ notification: Notification) {
-        store.resumeAfterSleepIfNeeded()
-        store.startActiveSession()
+        activityGate.systemDidWake()
+        store.noteSystemWake()
+    }
+
+    @objc private func handleScreensDidSleep(_ notification: Notification) {
+        activityGate.screenDidSleep()
+        reconcileInteractiveTracking()
+    }
+
+    @objc private func handleScreensDidWake(_ notification: Notification) {
+        activityGate.screenDidWake()
+        activityGate.sessionActive = Self.currentSessionIsActive
+        reconcileInteractiveTracking()
+    }
+
+    @objc private func handleSessionDidResignActive(_ notification: Notification) {
+        activityGate.sessionDidResign()
+        reconcileInteractiveTracking()
+    }
+
+    @objc private func handleSessionDidBecomeActive(_ notification: Notification) {
+        activityGate.sessionDidBecomeActive(screenIsAwake: Self.mainDisplayIsAwake)
+        reconcileInteractiveTracking()
     }
 
     private func configureOutsideClickHandling() {
@@ -186,16 +298,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
             DispatchQueue.main.async {
+                self?.noteInteractiveActivity()
                 self?.closePopover()
             }
         }
+    }
+
+    private func noteInteractiveActivity() {
+        guard didFinishLaunching else { return }
+        let screenIsAwake = Self.mainDisplayIsAwake
+        if Self.currentSessionIsActive {
+            activityGate.sessionDidBecomeActive(screenIsAwake: screenIsAwake)
+        } else {
+            activityGate.sessionDidResign()
+        }
+        if screenIsAwake {
+            activityGate.systemDidWake()
+        }
+        reconcileInteractiveTracking()
+    }
+
+    private func reconcileInteractiveTracking() {
+        guard didFinishLaunching else { return }
+        if activityGate.isInteractive {
+            store.resumeInteractiveTracking()
+            if !trackingIsInteractive {
+                trackingIsInteractive = true
+                meetingMonitor.start()
+            }
+        } else {
+            store.suspendTracking()
+            if trackingIsInteractive {
+                trackingIsInteractive = false
+                meetingMonitor.suspend()
+            }
+        }
+    }
+
+    private func configureTrackingLifecycle() {
+        store.onSuspensionDetected = { [weak self] in
+            guard let self else { return }
+            self.trackingIsInteractive = false
+            self.meetingMonitor.suspend()
+            self.activityGate = InteractiveActivityGate(
+                powerAwake: true,
+                screenAwake: Self.mainDisplayIsAwake,
+                sessionActive: Self.currentSessionIsActive
+            )
+            self.reconcileInteractiveTracking()
+        }
+    }
+
+    private static var mainDisplayIsAwake: Bool {
+        CGDisplayIsAsleep(CGMainDisplayID()) == 0
+    }
+
+    private static var currentSessionIsActive: Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        guard
+            let onConsole = session[kCGSessionOnConsoleKey as String] as? Bool,
+            let loginDone = session[kCGSessionLoginDoneKey as String] as? Bool
+        else {
+            return false
+        }
+        // This private key is present while locked and commonly absent while
+        // unlocked. The public console/login facts above remain fail-closed.
+        let screenLocked = session["CGSSessionScreenIsLocked"] as? Bool ?? false
+        return onConsole && loginDone && !screenLocked
     }
 
     private func configureMeetingMonitor() {
         meetingMonitor.onMeetingStateChange = { [weak self] isActive in
             self?.store.setMeetingActive(isActive)
         }
-        meetingMonitor.start()
     }
 
     private func configureStatusTitleUpdates() {
@@ -204,15 +379,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DispatchQueue.main.async {
                     self?.updateStatusItemTitle()
                     self?.evaluateTimerExpirationBanner()
-                    self?.evaluateBreakExpirationBanner()
                 }
             }
             .store(in: &cancellables)
     }
 
+    @objc private func handleFocusModeDidEnd(_ notification: Notification) {
+        showNextFocusBanner(after: 0.15)
+    }
+
+    @objc private func handleFocusDidStart(_ notification: Notification) {
+        guard let start = notification.object as? FocusStart else { return }
+        showFocusStartedBanner(start)
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showPopover()
-        return true
+        false
     }
 
     func applicationDidResignActive(_ notification: Notification) {
@@ -243,6 +425,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func closePopover() {
         guard !isChoosingApplication else { return }
         guard popover.isShown else { return }
+        NotificationCenter.default.post(name: .loopPopoverWillClose, object: nil)
         popover.performClose(nil)
     }
 
@@ -255,23 +438,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appNameItem.isEnabled = false
         menu.addItem(appNameItem)
         menu.addItem(.separator())
-        if store.isInMeeting {
-            let meetingItem = NSMenuItem(title: store.meetingTimerText ?? "In meeting", action: nil, keyEquivalent: "")
-            meetingItem.isEnabled = false
-            menu.addItem(meetingItem)
-            menu.addItem(NSMenuItem(title: "End meeting mode", action: #selector(endMeetingModeFromStatusMenu), keyEquivalent: ""))
-            menu.addItem(.separator())
-        }
-        if store.isInRoutine {
-            let routineItem = NSMenuItem(title: store.routineTimerText ?? "In routine", action: nil, keyEquivalent: "")
-            routineItem.isEnabled = false
-            menu.addItem(routineItem)
-            menu.addItem(NSMenuItem(title: "End routine", action: #selector(endRoutineFromStatusMenu), keyEquivalent: ""))
-            menu.addItem(.separator())
-        }
 
         addFocusedTaskItems(to: menu)
 
+        menu.addItem(taskMenuItem(title: "Settings", action: #selector(showSettingsFromStatusMenu), imageName: "gearshape"))
+        menu.addItem(taskMenuItem(title: "Stats", action: #selector(showStatsFromStatusMenu), imageName: "chart.bar"))
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit \(appDisplayName)", action: #selector(quitFromStatusMenu), keyEquivalent: "q"))
 
         menu.popUp(positioning: appNameItem, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
@@ -286,59 +458,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let taskTitleItem = NSMenuItem(title: truncatedMenuBarTitle(task.title), action: nil, keyEquivalent: "")
+        let taskTitleItem = NSMenuItem(title: truncatedTrayTaskTitle(task.title), action: nil, keyEquivalent: "")
         taskTitleItem.isEnabled = false
         menu.addItem(taskTitleItem)
 
         menu.addItem(taskMenuItem(title: "Done", action: #selector(markCurrentTaskDoneFromStatusMenu), imageName: "checkmark.circle"))
 
-        if task.iterationTimerMinutes != nil, !task.doneThisLoop, !task.finished, !task.isBacklog {
-            let extendMenu = NSMenu()
-            extendMenu.addItem(taskMenuItem(title: "2 minutes", action: #selector(extendCurrentTaskTwoMinutesFromStatusMenu), imageName: "plus.circle"))
-            extendMenu.addItem(taskMenuItem(title: "5 minutes", action: #selector(extendCurrentTaskFiveMinutesFromStatusMenu), imageName: "plus.circle"))
+        let extendItem = taskMenuItem(title: "Extend 5 minutes", action: #selector(extendCurrentTaskFiveMinutesFromStatusMenu), imageName: "timer")
+        extendItem.isEnabled = task.iterationTimerMinutes != nil && !task.doneThisLoop && !task.finished && !task.isBacklog
+        menu.addItem(extendItem)
 
-            let extendItem = NSMenuItem(title: "Extend timer", action: nil, keyEquivalent: "")
-            extendItem.image = menuImage("timer")
-            extendItem.submenu = extendMenu
-            menu.addItem(extendItem)
-        }
-
-        if store.isSnoozed(task) {
-            menu.addItem(taskMenuItem(title: "Unsnooze", action: #selector(unsnoozeCurrentTaskFromStatusMenu), imageName: "clock.arrow.circlepath"))
-        } else {
-            menu.addItem(taskMenuItem(
-                title: task.doneThisLoop ? "Snooze Next Iterations" : "Snooze 30 minutes",
-                action: #selector(snoozeCurrentTaskThirtyMinutesFromStatusMenu),
-                imageName: "clock"
-            ))
-
-            let snoozeMenu = NSMenu()
-            for preset in SnoozePreset.secondaryOptions {
-                let item = NSMenuItem(title: preset.title, action: #selector(snoozeCurrentTaskFromStatusMenu(_:)), keyEquivalent: "")
-                item.target = self
-                item.representedObject = preset.minutes
-                item.image = menuImage(preset.systemImage)
-                snoozeMenu.addItem(item)
-            }
-            snoozeMenu.addItem(.separator())
-            snoozeMenu.addItem(taskMenuItem(title: "Move to backlog", action: #selector(moveCurrentTaskToBacklogFromStatusMenu), imageName: "tray.and.arrow.down"))
-
-            let snoozeItem = NSMenuItem(title: "Snooze for...", action: nil, keyEquivalent: "")
-            snoozeItem.image = menuImage("clock.badge.questionmark")
-            snoozeItem.submenu = snoozeMenu
-            menu.addItem(snoozeItem)
-        }
-
-        menu.addItem(.separator())
-        menu.addItem(taskMenuItem(title: "Edit", action: #selector(editCurrentTaskFromStatusMenu), imageName: "pencil"))
-        menu.addItem(taskMenuItem(
-            title: task.isPriority ? "Remove Priority" : "Mark Priority",
-            action: #selector(toggleCurrentTaskPriorityFromStatusMenu),
-            imageName: task.isPriority ? "star.slash" : "star"
-        ))
-        menu.addItem(taskMenuItem(title: "Move to Backlog", action: #selector(moveCurrentTaskToBacklogFromStatusMenu), imageName: "tray.and.arrow.down"))
+        menu.addItem(taskMenuItem(title: "Snooze 30 minutes", action: #selector(snoozeCurrentTaskThirtyMinutesFromStatusMenu), imageName: "clock"))
+        menu.addItem(taskMenuItem(title: "Schedule for Next Day", action: #selector(scheduleCurrentTaskForNextWorkingDayFromStatusMenu), imageName: "calendar.badge.clock"))
         menu.addItem(taskMenuItem(title: "Finish", action: #selector(finishCurrentTaskFromStatusMenu), imageName: "checkmark.seal"))
-        menu.addItem(taskMenuItem(title: "Delete", action: #selector(deleteCurrentTaskFromStatusMenu), imageName: "trash"))
         menu.addItem(.separator())
     }
 
@@ -390,6 +522,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func extendCurrentTaskFiveMinutesFromStatusMenu(_ sender: Any?) {
         extendCurrentTask(by: 5)
+    }
+
+    @objc private func scheduleCurrentTaskForNextWorkingDayFromStatusMenu(_ sender: Any?) {
+        guard let task = store.focusedTask else { return }
+        store.scheduleForNextWorkingDay(task)
+    }
+
+    @objc private func showSettingsFromStatusMenu(_ sender: Any?) {
+        showSettingsWindow(initialSection: .general)
+    }
+
+    @objc private func showStatsFromStatusMenu(_ sender: Any?) {
+        showSettingsWindow(initialSection: .stats)
     }
 
     @objc private func snoozeCurrentTaskThirtyMinutesFromStatusMenu(_ sender: Any?) {
@@ -506,6 +651,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return "\(trimmedTitle.prefix(31))..."
     }
 
+    private func truncatedTrayTaskTitle(_ title: String?) -> String {
+        let trimmedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedTitle.isEmpty else { return "" }
+        guard trimmedTitle.count > 24 else { return trimmedTitle }
+        return "\(trimmedTitle.prefix(21))..."
+    }
+
     private func menuBarTitle(taskTitle: String?, timerText: String?) -> String {
         let title = truncatedMenuBarTitle(taskTitle)
         guard let timerText else { return title }
@@ -524,11 +676,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showPopover() {
         guard let button = statusItem?.button else { return }
         NSApp.activate(ignoringOtherApps: true)
+        store.refreshCurrentDate()
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             NSApp.activate(ignoringOtherApps: true)
             self.popover.contentViewController?.view.window?.makeKey()
+            NotificationCenter.default.post(name: .loopShouldCheckMorningOnboarding, object: nil)
         }
     }
 
@@ -571,6 +725,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func showSettingsWindow(initialSection: SettingsSection) {
+        closePopover()
+
+        let window: NSWindow
+        if let settingsWindow {
+            window = settingsWindow
+        } else {
+            window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 560, height: 560),
+                styleMask: [.titled, .closable, .miniaturizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.isReleasedWhenClosed = false
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            settingsWindow = window
+        }
+
+        window.title = initialSection == .stats ? "Loop Stats" : "Loop Settings"
+        window.contentView = NSHostingView(rootView: SettingsPanelView(
+            initialSection: initialSection,
+            onChooseApplication: { [weak self] in
+                self?.chooseApplication()
+            },
+            onClose: { [weak self] in
+                self?.settingsWindow?.close()
+            }
+        )
+        .environmentObject(store))
+        window.center()
+        NSApp.activate(ignoringOtherApps: true)
+        window.makeKeyAndOrderFront(nil)
+    }
+
     private func showFocusBanner() {
         let bannerState = FocusBannerState(task: store.focusedTask, routine: store.activeRoutineBlock)
         showBanner(state: bannerState) { [weak self] in
@@ -581,6 +769,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.store.openLinkedApp(for: activeRoutineBlock)
             }
             self.dismissFocusBanner()
+        }
+    }
+
+    private func showFocusStartedBanner(_ start: FocusStart) {
+        switch start {
+        case .break:
+            showBanner(
+                state: FocusBannerState(
+                    title: "Break started",
+                    subtitle: store.breakTimerText ?? "Take a break",
+                    systemImage: "cup.and.saucer.fill"
+                ),
+                onClick: {}
+            )
+        case .routine(let routineID):
+            let routine = store.activeRoutineBlock ?? store.routineBlocks.first { $0.id == routineID }
+            showBanner(state: FocusBannerState(task: nil, routine: routine)) { [weak self] in
+                guard let self else { return }
+                if let routine {
+                    self.store.openLinkedApp(for: routine)
+                }
+                self.dismissFocusBanner()
+            }
+        case .task(let taskID):
+            guard let task = store.tasks.first(where: { $0.id == taskID }) else { return }
+            showBanner(state: FocusBannerState(task: task)) { [weak self] in
+                guard let self else { return }
+                self.store.openLinkedApp(for: task)
+                self.dismissFocusBanner()
+            }
+        }
+    }
+
+    private func showNextFocusBanner(after delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            guard self.store.focusedTask != nil || self.store.activeRoutineBlock != nil else { return }
+            self.showFocusBanner()
         }
     }
 
@@ -620,35 +846,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 title: "Time is up",
                 subtitle: task.title,
                 systemImage: "timer"
-            ),
-            onClick: {}
-        )
-    }
-
-    private func evaluateBreakExpirationBanner() {
-        guard
-            store.isOnBreak,
-            store.isBreakTimeUp,
-            let breakStartedAt = store.breakStartedAt,
-            let breakUntil = store.breakUntil
-        else {
-            breakExpirationContext = nil
-            return
-        }
-
-        let context = BreakExpirationContext(startedAt: breakStartedAt, until: breakUntil)
-        guard breakExpirationContext != context else { return }
-
-        breakExpirationContext = context
-        showBreakExpiredBanner()
-    }
-
-    private func showBreakExpiredBanner() {
-        showBanner(
-            state: FocusBannerState(
-                title: "Break is over",
-                subtitle: "End break when you are ready",
-                systemImage: "cup.and.saucer.fill"
             ),
             onClick: {}
         )
@@ -701,6 +898,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         focusBannerDismissWorkItem = nil
         focusBannerWindow?.close()
         focusBannerWindow = nil
+    }
+}
+
+extension AppDelegate: NSPopoverDelegate {
+    func popoverWillClose(_ notification: Notification) {
+        NotificationCenter.default.post(name: .loopPopoverWillClose, object: nil)
     }
 }
 
@@ -901,11 +1104,6 @@ private extension NSView {
 private struct TimerExpirationContext: Equatable {
     let taskID: UUID
     let startedAt: Date
-}
-
-private struct BreakExpirationContext: Equatable {
-    let startedAt: Date
-    let until: Date
 }
 
 private struct FocusBannerState {

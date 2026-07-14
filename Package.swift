@@ -14,6 +14,11 @@ let package = Package(
         .executableTarget(
             name: "Loop",
             path: "Sources/Loop"
+        ),
+        .testTarget(
+            name: "LoopTests",
+            dependencies: ["Loop"],
+            path: "Tests/LoopTests"
         )
     ]
 )

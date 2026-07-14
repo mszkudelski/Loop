@@ -40,7 +40,7 @@ cat > "$AGENT_PLIST" <<PLIST
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <false/>
   <key>ProcessType</key>
   <string>Interactive</string>
   <key>StandardOutPath</key>
