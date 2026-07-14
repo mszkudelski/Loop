@@ -942,6 +942,19 @@ final class TaskStore: ObservableObject {
         ensureFocusedTask(openLinkedAppIfChanged: true)
     }
 
+    func snoozeRoutine(_ routine: RoutineBlock, minutes: Int = 30) {
+        guard minutes > 0 else { return }
+        guard let index = routineBlocks.firstIndex(where: { $0.id == routine.id && $0.isEnabled }) else { return }
+        guard activeRoutineBlockID != routine.id else { return }
+
+        recordAction(.snoozeRoutine)
+        let now = Date()
+        routineBlocks[index].snoozedUntil = now.addingTimeInterval(TimeInterval(minutes * 60))
+        routineBlocks[index].updatedAt = now
+        currentDate = now
+        ensureFocusedTask()
+    }
+
     func addTask(
         title: String,
         linkedApp: LinkedApp? = nil,
@@ -1434,12 +1447,18 @@ final class TaskStore: ObservableObject {
     func isRoutineDue(_ routine: RoutineBlock) -> Bool {
         guard routine.isEnabled else { return false }
         guard activeRoutineBlockID != routine.id else { return false }
+        guard !isRoutineSnoozed(routine) else { return false }
         if let scheduledDate = activeScheduledDate(for: routine) {
             return routine.lastCompletedScheduledAt.map { $0 < scheduledDate } ?? true
         }
         guard routine.scheduleTimes.isEmpty else { return false }
         guard let lastCompletedLoop = routine.lastCompletedLoop else { return true }
         return loopNumber - lastCompletedLoop >= routine.cadence.rawValue
+    }
+
+    func isRoutineSnoozed(_ routine: RoutineBlock, at date: Date = Date()) -> Bool {
+        guard let snoozedUntil = routine.snoozedUntil else { return false }
+        return snoozedUntil > date
     }
 
     func iterationTimerRemainingSeconds(for task: LoopTask, at date: Date? = nil) -> Int? {
@@ -2526,6 +2545,11 @@ final class TaskStore: ObservableObject {
             tasks[index].updatedAt = now
             didChange = true
         }
+        for index in routineBlocks.indices where routineBlocks[index].snoozedUntil.map({ $0 <= now }) == true {
+            routineBlocks[index].snoozedUntil = nil
+            routineBlocks[index].updatedAt = now
+            didChange = true
+        }
 
         if didChange, isInteractiveTrackingEnabled {
             ensureFocusedTask()
@@ -2962,6 +2986,7 @@ private enum LoopAction: String, CaseIterable {
     case completeRoutine
     case skipRoutine
     case reopenRoutine
+    case snoozeRoutine
     case setAutoOpenFocusedTaskApp
     case setOpenLoopAtLogin
     case setBreakDuration
@@ -2973,7 +2998,7 @@ private enum LoopAction: String, CaseIterable {
     var title: String {
         switch self {
         case .addTask: "Add task"
-        case .addBacklogTask: "Add later task"
+        case .addBacklogTask: "Add inbox task"
         case .updateTask: "Edit task details"
         case .renameTask: "Rename task"
         case .completeTask: "Complete task"
@@ -2983,7 +3008,7 @@ private enum LoopAction: String, CaseIterable {
         case .restoreTask: "Restore task"
         case .deleteTask: "Delete task"
         case .addToIteration: "Add to iteration"
-        case .moveToBacklog: "Move to later"
+        case .moveToBacklog: "Move to inbox"
         case .markPriority: "Mark priority"
         case .removePriority: "Remove priority"
         case .focusTask: "Focus task"
@@ -3006,6 +3031,7 @@ private enum LoopAction: String, CaseIterable {
         case .completeRoutine: "Complete routine"
         case .skipRoutine: "Skip routine"
         case .reopenRoutine: "Reopen routine"
+        case .snoozeRoutine: "Snooze routine"
         case .setAutoOpenFocusedTaskApp: "Toggle auto-open app"
         case .setOpenLoopAtLogin: "Toggle login launch"
         case .setBreakDuration: "Change break duration"
@@ -3028,7 +3054,7 @@ private enum LoopAction: String, CaseIterable {
         case .moveToBacklog: "tray.and.arrow.down"
         case .markPriority, .removePriority: "star"
         case .focusTask: "scope"
-        case .snoozeTask, .unsnoozeTask: "clock"
+        case .snoozeTask, .unsnoozeTask, .snoozeRoutine: "clock"
         case .clearSchedule, .scheduleForNextWorkingDay: "calendar.badge.clock"
         case .extendTimer, .setDefaultIterationTimer: "timer"
         case .reorderTask: "arrow.up.arrow.down"
@@ -3051,7 +3077,7 @@ private enum LoopAction: String, CaseIterable {
              .extendTimer, .reorderTask:
             return .tasks
         case .addRoutine, .updateRoutine, .deleteRoutine, .startRoutine, .completeRoutine, .skipRoutine,
-             .reopenRoutine:
+             .reopenRoutine, .snoozeRoutine:
             return .routines
         case .advanceLoop, .resetLoop, .startBreak, .endBreak, .startMeeting, .endMeeting,
              .dismissSuggestion, .dismissFastLoopSuggestion, .completeMorningPlan:

@@ -336,7 +336,7 @@ struct LoopPanelView: View {
                     }
                 )
                 .frame(height: 24)
-                .loopHelp("Enter adds task, Command Enter adds to Later")
+                .loopHelp("Enter adds task, Command Enter adds to Inbox")
 
                 Button {
                     addQuickTask()
@@ -350,11 +350,11 @@ struct LoopPanelView: View {
                 Button {
                     addQuickBacklogTask()
                 } label: {
-                    Text("Later")
+                    Text("Inbox")
                         .frame(width: 52, height: 24)
                 }
                 .buttonStyle(FooterControlButtonStyle())
-                .loopHelp("Add to Later")
+                .loopHelp("Add to Inbox")
 
                 Button {
                     isAddingDetailedTask = true
@@ -718,7 +718,7 @@ private struct LoopTasksView: View {
             }
         case .future:
             TaskSection(title: "Future", tasks: store.upcomingTasks, emptyTitle: "No future tasks") { task in
-                TaskRow(task: task) {
+                TaskRow(task: task, usesFutureActions: true) {
                     editingTask = task
                 }
             }
@@ -927,6 +927,12 @@ private struct RoutineDueRow: View {
                     store.endRoutineBlock(markComplete: false)
                 } label: {
                     Label("Skip Routine", systemImage: "forward.end")
+                }
+            } else {
+                Button {
+                    store.snoozeRoutine(routine, minutes: 30)
+                } label: {
+                    Label("Snooze 30 minutes", systemImage: "clock")
                 }
             }
 
@@ -1416,6 +1422,7 @@ private struct TaskRow: View {
     /// Open items must remain legible even while a task-state update is propagating.
     /// Completed styling belongs exclusively to the Done presentation.
     let isOpenPresentation: Bool
+    let usesFutureActions: Bool
     let onEdit: () -> Void
 
     @State private var isHovered = false
@@ -1423,9 +1430,15 @@ private struct TaskRow: View {
     @State private var draftTitle = ""
     private let shouldShowHintSuggestions = false
 
-    init(task: LoopTask, isOpenPresentation: Bool = false, onEdit: @escaping () -> Void) {
+    init(
+        task: LoopTask,
+        isOpenPresentation: Bool = false,
+        usesFutureActions: Bool = false,
+        onEdit: @escaping () -> Void
+    ) {
         self.task = task
         self.isOpenPresentation = isOpenPresentation
+        self.usesFutureActions = usesFutureActions
         self.onEdit = onEdit
     }
 
@@ -1446,7 +1459,7 @@ private struct TaskRow: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(task.isBacklog)
-                .loopHelp(task.isBacklog ? "Later" : (task.doneThisLoop ? "Reopen" : "Done"))
+                .loopHelp(task.isBacklog ? "Inbox" : (task.doneThisLoop ? "Reopen" : "Done"))
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 6) {
@@ -1525,7 +1538,11 @@ private struct TaskRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 Menu {
-                    taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                    if usesFutureActions {
+                        futureTaskActions()
+                    } else {
+                        taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.body.weight(.semibold))
@@ -1564,7 +1581,11 @@ private struct TaskRow: View {
                 }
             }
             .contextMenu {
-                taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                if usesFutureActions {
+                    futureTaskActions()
+                } else {
+                    taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                }
             }
 
             if shouldShowHintSuggestions, let suggestion = store.suggestion(for: task) {
@@ -1590,6 +1611,47 @@ private struct TaskRow: View {
 
     private var isVisuallyCompleted: Bool {
         task.doneThisLoop && !isOpenPresentation
+    }
+
+    @ViewBuilder
+    private func futureTaskActions() -> some View {
+        Button {
+            store.clearSchedule(for: task)
+        } label: {
+            Label("Add Now", systemImage: "calendar.badge.clock")
+        }
+
+        Button {
+            store.scheduleForNextWorkingDay(task)
+        } label: {
+            Label("Schedule for Next Day", systemImage: "calendar.badge.clock")
+        }
+
+        Divider()
+
+        Button {
+            onEdit()
+        } label: {
+            Label("Edit Details", systemImage: "slider.horizontal.3")
+        }
+
+        Button {
+            store.moveToBacklog(task)
+        } label: {
+            Label("Move to Inbox", systemImage: "tray.and.arrow.down")
+        }
+
+        Button {
+            store.finish(task)
+        } label: {
+            Label("Finish", systemImage: "checkmark.seal")
+        }
+
+        Button {
+            store.delete(task)
+        } label: {
+            Label("Delete", systemImage: "trash")
+        }
     }
 
     @ViewBuilder
@@ -1676,7 +1738,7 @@ private struct TaskRow: View {
                 Button {
                     store.moveToBacklog(task)
                 } label: {
-                    Label("Move to Later", systemImage: "tray.and.arrow.down")
+                    Label("Move to Inbox", systemImage: "tray.and.arrow.down")
                 }
             } label: {
                 Label("Snooze for...", systemImage: "clock.badge.questionmark")
@@ -1710,7 +1772,7 @@ private struct TaskRow: View {
             Button {
                 store.moveToBacklog(task)
             } label: {
-                Label("Move to Later", systemImage: "tray.and.arrow.down")
+                Label("Move to Inbox", systemImage: "tray.and.arrow.down")
             }
         }
 
@@ -1967,9 +2029,9 @@ private struct MorningOnboardingView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
-                    MorningPlanChip(value: "\(iterationTasks.count)", label: "open", systemImage: "circle")
-                    MorningPlanChip(value: "\(iterationTasks.filter(\.isPriority).count)", label: "priority", systemImage: "star")
-                    MorningPlanChip(value: "\(store.backlogTasks.count)", label: "later", systemImage: "tray")
+                    MorningPlanChip(value: "\(openIterationTasks.count)", label: "open", systemImage: "circle")
+                    MorningPlanChip(value: "\(openIterationTasks.filter(\.isPriority).count)", label: "priority", systemImage: "star")
+                    MorningPlanChip(value: "\(store.backlogTasks.count)", label: "inbox", systemImage: "tray")
                 }
 
                 Button {
@@ -2020,10 +2082,10 @@ private struct MorningOnboardingView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 8) {
-                        sectionHeader("Move From Later", count: store.backlogTasks.count)
+                        sectionHeader("Move From Inbox", count: store.backlogTasks.count)
 
                         if store.backlogTasks.isEmpty {
-                            emptyRow("No later tasks")
+                            emptyRow("No inbox tasks")
                         } else {
                             ForEach(store.backlogTasks) { task in
                                 MorningBacklogTaskRow(task: task) {
@@ -2046,7 +2108,11 @@ private struct MorningOnboardingView: View {
     }
 
     private var iterationTasks: [LoopTask] {
-        store.currentLoopTasks.filter { !$0.doneThisLoop }
+        store.currentLoopTasks
+    }
+
+    private var openIterationTasks: [LoopTask] {
+        iterationTasks.filter { !$0.doneThisLoop }
     }
 
     private var quickAdd: some View {
@@ -2065,7 +2131,7 @@ private struct MorningOnboardingView: View {
                     }
                 )
                 .frame(height: 26)
-                .loopHelp("Enter adds to iteration, Command Enter adds to Later")
+                .loopHelp("Enter adds to iteration, Command Enter adds to Inbox")
 
                 Button {
                     addTask(addToIteration: true)
@@ -2079,11 +2145,11 @@ private struct MorningOnboardingView: View {
                 Button {
                     addTask(addToIteration: false)
                 } label: {
-                    Text("Later")
+                    Text("Inbox")
                         .frame(width: 54, height: 26)
                 }
                 .buttonStyle(FooterControlButtonStyle())
-                .loopHelp("Add to Later")
+                .loopHelp("Add to Inbox")
             }
         }
     }
@@ -2180,7 +2246,8 @@ private struct MorningIterationTaskRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(task.title)
                         .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(task.doneThisLoop ? .secondary : .primary)
+                        .strikethrough(task.doneThisLoop, color: .secondary)
                         .lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -2246,7 +2313,7 @@ private struct MorningIterationTaskRow: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .loopHelp("Move to Later")
+            .loopHelp("Move to Inbox")
 
             Button {
                 store.delete(task)
@@ -2366,7 +2433,7 @@ private struct BacklogPanelView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Later")
+                    Text("Inbox")
                         .font(.title3.weight(.semibold))
                     Text("\(store.backlogTasks.count) \(store.backlogTasks.count == 1 ? "item" : "items")")
                         .font(.caption.weight(.medium))
@@ -2391,7 +2458,7 @@ private struct BacklogPanelView: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    TaskSection(title: "Later", tasks: store.backlogTasks, emptyTitle: "No later tasks") { task in
+                    TaskSection(title: "Inbox", tasks: store.backlogTasks, emptyTitle: "No inbox tasks") { task in
                         BacklogTaskRow(task: task) {
                             editingTask = task
                         }
@@ -4791,7 +4858,7 @@ private struct ShortcutSettingsView: View {
                 )
 
                 shortcutRecorder(
-                    title: "Quick add to Later",
+                    title: "Quick add to Inbox",
                     shortcut: store.quickAddShortcut,
                     onRecord: store.applyQuickAddShortcut
                 )
