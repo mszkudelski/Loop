@@ -124,6 +124,7 @@ struct LoopPanelView: View {
     @EnvironmentObject private var store: TaskStore
 
     let onChooseApplication: () -> LinkedApp?
+    let onShowMorningPlan: () -> Void
 
     @State private var newTaskTitle = ""
     @State private var editingTask: LoopTask?
@@ -131,7 +132,6 @@ struct LoopPanelView: View {
     @State private var isAddingDetailedTask = false
     @State private var isShowingBacklog = false
     @State private var isShowingSettings = false
-    @State private var isShowingMorningOnboarding = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -188,12 +188,6 @@ struct LoopPanelView: View {
             BacklogPanelView(onChooseApplication: onChooseApplication)
                 .environmentObject(store)
         }
-        .sheet(isPresented: $isShowingMorningOnboarding, onDismiss: {
-            store.markMorningOnboardingShown()
-        }) {
-            MorningOnboardingView(onChooseApplication: onChooseApplication)
-                .environmentObject(store)
-        }
         .sheet(isPresented: $isShowingSettings) {
             SettingsPanelView(
                 initialSection: .general,
@@ -216,6 +210,15 @@ struct LoopPanelView: View {
             }
             editingTask = task
         }
+        .onReceive(NotificationCenter.default.publisher(for: .loopShouldEditRoutine)) { notification in
+            guard
+                let routineID = notification.object as? UUID,
+                let routine = store.routineBlocks.first(where: { $0.id == routineID })
+            else {
+                return
+            }
+            editingRoutine = routine
+        }
         .onAppear {
             showMorningOnboardingIfNeeded()
         }
@@ -225,68 +228,76 @@ struct LoopPanelView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Loop")
-                    .font(.title2.weight(.semibold))
-                Text("Iteration \(store.loopNumber)")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
+        VStack(spacing: 8) {
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Loop")
+                        .font(.title2.weight(.semibold))
+                    Text("Iteration \(store.loopNumber)")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    onShowMorningPlan()
+                } label: {
+                    Image(systemName: "sun.max")
+                        .font(.title3)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .loopHelp("Plan iteration")
+
+                if store.isOnBreak {
+                    Button {
+                        store.endBreak()
+                    } label: {
+                        Image(systemName: "play.fill")
+                            .font(.caption.weight(.bold))
+                            .frame(width: 26, height: 26)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .loopHelp("End break")
+                }
+
+                Button {
+                    store.advanceLoop()
+                } label: {
+                    Image(systemName: "arrow.right.circle.fill")
+                        .font(.title3)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+                .loopHelp("Next iteration")
+
+                Button {
+                    isShowingSettings = true
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.title3)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .loopHelp("Settings")
             }
 
-            Spacer(minLength: 8)
-
             HStack(spacing: 6) {
+                Text("Last \(lastIterationDurationText) · Avg \(averageIterationDurationText)")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
                 HeaderStatChip(value: "\(store.loopsCompletedToday)", label: "loops", color: Color(nsColor: .systemGreen))
                 HeaderStatChip(value: "\(store.tasksFinishedToday.count)", label: "done", color: Color(nsColor: .systemBlue))
                 HeaderStatChip(value: "\(productivityPercentage)%", label: "prod.", color: .secondary)
             }
-
-            Button {
-                isShowingMorningOnboarding = true
-            } label: {
-                Image(systemName: "sun.max")
-                    .font(.title3)
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .loopHelp("Plan iteration")
-
-            if store.isOnBreak {
-                Button {
-                    store.endBreak()
-                } label: {
-                    Image(systemName: "play.fill")
-                        .font(.caption.weight(.bold))
-                        .frame(width: 26, height: 26)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Color.accentColor)
-                .loopHelp("End break")
-            }
-
-            Button {
-                store.advanceLoop()
-            } label: {
-                Image(systemName: "arrow.right.circle.fill")
-                    .font(.title3)
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-            .loopHelp("Next iteration")
-
-            Button {
-                isShowingSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .loopHelp("Settings")
         }
         .padding(.horizontal, 16)
         .padding(.top, 14)
@@ -302,6 +313,16 @@ struct LoopPanelView: View {
         guard trackedDuration > 0 else { return 0 }
         let ratio = store.productiveDuration(on: store.currentDate) / trackedDuration
         return Int(round(min(max(ratio, 0), 1) * 100))
+    }
+
+    private var lastIterationDurationText: String {
+        guard let duration = store.previousIterationDuration(on: store.currentDate) else { return "–" }
+        return IterationDurationFormatter.string(from: duration)
+    }
+
+    private var averageIterationDurationText: String {
+        guard let duration = store.averageIterationDuration(on: store.currentDate) else { return "–" }
+        return IterationDurationFormatter.string(from: duration)
     }
 
     private var footer: some View {
@@ -384,8 +405,7 @@ struct LoopPanelView: View {
 
     private func showMorningOnboardingIfNeeded() {
         guard store.shouldShowMorningOnboarding else { return }
-        guard !isShowingMorningOnboarding else { return }
-        isShowingMorningOnboarding = true
+        onShowMorningPlan()
     }
 }
 
@@ -558,11 +578,13 @@ private struct BreakOverlayView: View {
     }
 
     private var remainingText: String {
-        guard !store.isBreakTimeUp else { return "Done" }
-        let seconds = store.breakRemainingSeconds
-        let minutes = seconds / 60
-        let remainder = seconds % 60
-        return String(format: "%d:%02d", minutes, remainder)
+        signedCountdownText(store.breakRemainingSeconds)
+    }
+
+    private func signedCountdownText(_ seconds: Int) -> String {
+        let absoluteSeconds = abs(seconds)
+        let sign = seconds < 0 ? "-" : ""
+        return String(format: "%@%d:%02d", sign, absoluteSeconds / 60, absoluteSeconds % 60)
     }
 }
 
@@ -610,11 +632,13 @@ private struct RoutineOverlayView: View {
     }
 
     private var remainingText: String {
-        guard !store.isRoutineTimeUp else { return "Done" }
-        let seconds = store.routineRemainingSeconds
-        let minutes = seconds / 60
-        let remainder = seconds % 60
-        return String(format: "%d:%02d", minutes, remainder)
+        signedCountdownText(store.routineRemainingSeconds)
+    }
+
+    private func signedCountdownText(_ seconds: Int) -> String {
+        let absoluteSeconds = abs(seconds)
+        let sign = seconds < 0 ? "-" : ""
+        return String(format: "%@%d:%02d", sign, absoluteSeconds / 60, absoluteSeconds % 60)
     }
 }
 
@@ -890,6 +914,18 @@ private struct RoutineDueRow: View {
             }
             .buttonStyle(.plain)
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            Menu {
+                routineActions
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .menuStyle(.borderlessButton)
+            .loopHelp("Routine actions")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
@@ -908,50 +944,67 @@ private struct RoutineDueRow: View {
             }
         }
         .contextMenu {
-            Button {
-                toggleRoutine()
-            } label: {
-                Label(isActive ? "Complete Routine" : "Start Routine", systemImage: isActive ? "checkmark" : "play")
-            }
+            routineActions
+        }
+    }
 
-            if isActive {
+    @ViewBuilder
+    private var routineActions: some View {
+        Button {
+            toggleRoutine()
+        } label: {
+            Label(isActive ? "Complete Routine" : "Start Routine", systemImage: isActive ? "checkmark" : "play")
+        }
+
+        if isActive {
+            Button {
+                store.endRoutineBlock(markComplete: false)
+            } label: {
+                Label("Skip Routine", systemImage: "forward.end")
+            }
+        }
+
+        Button {
+            store.snoozeRoutine(routine, minutes: 30)
+        } label: {
+            Label("Snooze 30 Minutes", systemImage: "clock")
+        }
+
+        Menu {
+            ForEach(SnoozePreset.secondaryOptions) { preset in
                 Button {
-                    store.endRoutineBlock(markComplete: false)
+                    store.snoozeRoutine(routine, minutes: preset.minutes)
                 } label: {
-                    Label("Skip Routine", systemImage: "forward.end")
-                }
-            } else {
-                Button {
-                    store.snoozeRoutine(routine, minutes: 30)
-                } label: {
-                    Label("Snooze 30 minutes", systemImage: "clock")
+                    Label(preset.title, systemImage: preset.systemImage)
                 }
             }
+        } label: {
+            Label("Snooze for…", systemImage: "clock.badge.questionmark")
+        }
 
-            Divider()
+        Divider()
 
-            RoutineCadenceMenu(routine: routine)
+        RoutineCadenceMenu(routine: routine)
 
-            Button {
-                onEdit()
-            } label: {
-                Label("Edit Details", systemImage: "slider.horizontal.3")
-            }
+        Button {
+            onEdit()
+        } label: {
+            Label("Edit Details", systemImage: "slider.horizontal.3")
+        }
 
-            Button {
-                store.setRoutineEnabled(routine, isEnabled: !routine.isEnabled)
-            } label: {
-                Label(
-                    routine.isEnabled ? "Disable Routine" : "Enable Routine",
-                    systemImage: routine.isEnabled ? "clock.badge.xmark" : "clock.badge.checkmark"
-                )
-            }
+        Button {
+            store.setRoutineEnabled(routine, isEnabled: !routine.isEnabled)
+        } label: {
+            Label(
+                routine.isEnabled ? "Disable Routine" : "Enable Routine",
+                systemImage: routine.isEnabled ? "clock.badge.xmark" : "clock.badge.checkmark"
+            )
+        }
 
-            Button {
-                store.deleteRoutineBlock(routine)
-            } label: {
-                Label("Delete", systemImage: "trash")
-            }
+        Button {
+            store.deleteRoutineBlock(routine)
+        } label: {
+            Label("Delete", systemImage: "trash")
         }
     }
 
@@ -1533,7 +1586,7 @@ private struct TaskRow: View {
                     if usesFutureActions {
                         futureTaskActions()
                     } else {
-                        taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                        StandardTaskContextMenu(task: task, onRename: beginTitleEdit, onEdit: onEdit)
                     }
                 } label: {
                     Image(systemName: "ellipsis")
@@ -1576,7 +1629,7 @@ private struct TaskRow: View {
                 if usesFutureActions {
                     futureTaskActions()
                 } else {
-                    taskActions(isFocused: isFocused, isSnoozed: isSnoozed)
+                    StandardTaskContextMenu(task: task, onRename: beginTitleEdit, onEdit: onEdit)
                 }
             }
 
@@ -1646,8 +1699,55 @@ private struct TaskRow: View {
         }
     }
 
-    @ViewBuilder
-    private func taskActions(isFocused: Bool, isSnoozed: Bool) -> some View {
+    private func beginTitleEdit() {
+        draftTitle = task.title
+        isEditingTitle = true
+        DispatchQueue.main.async {
+            isTitleFocused = true
+        }
+    }
+
+    private func endTitleEdit(commit: Bool) {
+        guard isEditingTitle else { return }
+        let title = draftTitle
+        isEditingTitle = false
+        isTitleFocused = false
+        if commit {
+            store.updateTaskTitle(task, title: title)
+        } else {
+            draftTitle = task.title
+        }
+    }
+
+    private func perform(_ suggestion: LoopTaskSuggestion) {
+        switch suggestion {
+        case .editCadence:
+            onEdit()
+        case .markPriority:
+            store.togglePriority(task)
+        case .snoozeAfterQuickDone:
+            store.snooze(task, minutes: 30)
+        }
+    }
+
+}
+
+private struct StandardTaskContextMenu: View {
+    @EnvironmentObject private var store: TaskStore
+
+    let task: LoopTask
+    let onRename: () -> Void
+    let onEdit: () -> Void
+
+    private var isFocused: Bool {
+        store.currentFocusTaskID == task.id
+    }
+
+    private var isSnoozed: Bool {
+        store.isSnoozed(task)
+    }
+
+    var body: some View {
         if task.isBacklog {
             Button {
                 store.addToIteration(task)
@@ -1739,15 +1839,11 @@ private struct TaskRow: View {
 
         Divider()
 
-        Button {
-            beginTitleEdit()
-        } label: {
+        Button(action: onRename) {
             Label("Rename", systemImage: "text.cursor")
         }
 
-        Button {
-            onEdit()
-        } label: {
+        Button(action: onEdit) {
             Label("Edit Details", systemImage: "slider.horizontal.3")
         }
 
@@ -1780,38 +1876,6 @@ private struct TaskRow: View {
             Label("Delete", systemImage: "trash")
         }
     }
-
-    private func beginTitleEdit() {
-        draftTitle = task.title
-        isEditingTitle = true
-        DispatchQueue.main.async {
-            isTitleFocused = true
-        }
-    }
-
-    private func endTitleEdit(commit: Bool) {
-        guard isEditingTitle else { return }
-        let title = draftTitle
-        isEditingTitle = false
-        isTitleFocused = false
-        if commit {
-            store.updateTaskTitle(task, title: title)
-        } else {
-            draftTitle = task.title
-        }
-    }
-
-    private func perform(_ suggestion: LoopTaskSuggestion) {
-        switch suggestion {
-        case .editCadence:
-            onEdit()
-        case .markPriority:
-            store.togglePriority(task)
-        case .snoozeAfterQuickDone:
-            store.snooze(task, minutes: 30)
-        }
-    }
-
 }
 
 struct SnoozePreset: Identifiable {
@@ -1996,14 +2060,16 @@ private struct LoopTaskDropDelegate: DropDelegate {
     }
 }
 
-private struct MorningOnboardingView: View {
-    @Environment(\.dismiss) private var dismiss
+struct MorningOnboardingView: View {
     @EnvironmentObject private var store: TaskStore
 
     let onChooseApplication: () -> LinkedApp?
+    let onComplete: () -> Void
 
     @State private var newTaskTitle = ""
     @State private var editingTask: LoopTask?
+    @State private var renamingTask: LoopTask?
+    @State private var renameDraft = ""
     @State private var draggingTaskID: UUID?
     @State private var lastDropTargetID: UUID?
 
@@ -2028,7 +2094,7 @@ private struct MorningOnboardingView: View {
 
                 Button {
                     store.markMorningOnboardingShown()
-                    dismiss()
+                    onComplete()
                 } label: {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.title3)
@@ -2051,10 +2117,12 @@ private struct MorningOnboardingView: View {
                         if iterationTasks.isEmpty {
                             emptyRow("No open tasks")
                         } else {
-                            ForEach(Array(iterationTasks.enumerated()), id: \.element.id) { index, task in
-                                MorningIterationTaskRow(task: task, index: index, count: iterationTasks.count) {
-                                    editingTask = task
-                                }
+                            ForEach(iterationTasks) { task in
+                                MorningIterationTaskRow(
+                                    task: task,
+                                    onRename: { beginRename(task) },
+                                    onEdit: { editingTask = task }
+                                )
                                 .opacity(draggingTaskID == task.id ? 0.45 : 1)
                                 .onDrag {
                                     draggingTaskID = task.id
@@ -2080,9 +2148,11 @@ private struct MorningOnboardingView: View {
                             emptyRow("No inbox tasks")
                         } else {
                             ForEach(store.backlogTasks) { task in
-                                MorningBacklogTaskRow(task: task) {
-                                    editingTask = task
-                                }
+                                MorningBacklogTaskRow(
+                                    task: task,
+                                    onRename: { beginRename(task) },
+                                    onEdit: { editingTask = task }
+                                )
                             }
                         }
                     }
@@ -2090,12 +2160,35 @@ private struct MorningOnboardingView: View {
                 .padding(16)
             }
         }
-        .frame(width: 560, height: 640)
+        .frame(
+            minWidth: 520,
+            idealWidth: 560,
+            maxWidth: .infinity,
+            minHeight: 560,
+            idealHeight: 640,
+            maxHeight: .infinity
+        )
         .background(Color(nsColor: .windowBackgroundColor))
         .sheet(item: $editingTask) { task in
             TaskEditorView(task: task, onChooseApplication: onChooseApplication) { updatedTask in
                 store.updateTask(updatedTask)
             }
+        }
+        .alert("Rename Task", isPresented: isRenamingTask) {
+            TextField("Task name", text: $renameDraft)
+
+            Button("Cancel", role: .cancel) {
+                renamingTask = nil
+            }
+
+            Button("Save") {
+                guard let renamingTask else { return }
+                store.updateTaskTitle(renamingTask, title: renameDraft)
+                self.renamingTask = nil
+            }
+            .disabled(renameDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        } message: {
+            Text("Enter a new name for this task.")
         }
     }
 
@@ -2105,6 +2198,17 @@ private struct MorningOnboardingView: View {
 
     private var openIterationTasks: [LoopTask] {
         iterationTasks.filter { !$0.doneThisLoop }
+    }
+
+    private var isRenamingTask: Binding<Bool> {
+        Binding(
+            get: { renamingTask != nil },
+            set: { isPresented in
+                if !isPresented {
+                    renamingTask = nil
+                }
+            }
+        )
     }
 
     private var quickAdd: some View {
@@ -2183,6 +2287,11 @@ private struct MorningOnboardingView: View {
         store.addTask(title: newTaskTitle, addToIteration: addToIteration)
         newTaskTitle = ""
     }
+
+    private func beginRename(_ task: LoopTask) {
+        renameDraft = task.title
+        renamingTask = task
+    }
 }
 
 private struct MorningPlanChip: View {
@@ -2211,8 +2320,7 @@ private struct MorningIterationTaskRow: View {
     @EnvironmentObject private var store: TaskStore
 
     let task: LoopTask
-    let index: Int
-    let count: Int
+    let onRename: () -> Void
     let onEdit: () -> Void
 
     var body: some View {
@@ -2267,28 +2375,6 @@ private struct MorningIterationTaskRow: View {
             .buttonStyle(.plain)
             .loopHelp("Edit details")
 
-            HStack(spacing: 2) {
-                Button {
-                    store.moveCurrentLoopTask(task, by: -1)
-                } label: {
-                    Image(systemName: "chevron.up")
-                        .frame(width: 22, height: 22)
-                }
-                .disabled(index == 0)
-                .loopHelp("Move up")
-
-                Button {
-                    store.moveCurrentLoopTask(task, by: 1)
-                } label: {
-                    Image(systemName: "chevron.down")
-                        .frame(width: 22, height: 22)
-                }
-                .disabled(index == count - 1)
-                .loopHelp("Move down")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-
             Button(action: onEdit) {
                 Image(systemName: "pencil")
                     .frame(width: 24, height: 24)
@@ -2321,6 +2407,9 @@ private struct MorningIterationTaskRow: View {
         .padding(.vertical, 9)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contextMenu {
+            StandardTaskContextMenu(task: task, onRename: onRename, onEdit: onEdit)
+        }
     }
 }
 
@@ -2328,6 +2417,7 @@ private struct MorningBacklogTaskRow: View {
     @EnvironmentObject private var store: TaskStore
 
     let task: LoopTask
+    let onRename: () -> Void
     let onEdit: () -> Void
 
     var body: some View {
@@ -2410,6 +2500,9 @@ private struct MorningBacklogTaskRow: View {
         .padding(.vertical, 9)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.78))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contextMenu {
+            StandardTaskContextMenu(task: task, onRename: onRename, onEdit: onEdit)
+        }
     }
 }
 
@@ -2755,8 +2848,8 @@ private struct RoutineSettingsRow: View {
             } label: {
                 Image(systemName: "play")
             }
-            .disabled(!routine.isEnabled)
-            .loopHelp("Start now")
+            .disabled(!routine.isEnabled || routinesArePausedForFocus)
+            .loopHelp(routinesArePausedForFocus ? "Routines are paused during focus time" : "Start now")
 
             Button {
                 onEdit()
@@ -2775,7 +2868,7 @@ private struct RoutineSettingsRow: View {
             } label: {
                 Label("Start Now", systemImage: "play")
             }
-            .disabled(!routine.isEnabled)
+            .disabled(!routine.isEnabled || routinesArePausedForFocus)
 
             Button {
                 onEdit()
@@ -2800,6 +2893,10 @@ private struct RoutineSettingsRow: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    private var routinesArePausedForFocus: Bool {
+        store.isFocusTimeActive && !store.focusTimeSchedule.includesRoutines
     }
 }
 
@@ -2834,6 +2931,19 @@ private struct GeneralSettingsView: View {
                 ))
                 .toggleStyle(.checkbox)
 
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Run morning routine", isOn: Binding(
+                        get: { store.morningRoutineEnabled },
+                        set: { store.setMorningRoutineEnabled($0) }
+                    ))
+                    .toggleStyle(.checkbox)
+
+                    Text("Show Morning Plan once a day and pause task focus until the plan is complete.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("New tasks")
                         .font(.callout.weight(.semibold))
@@ -2843,6 +2953,52 @@ private struct GeneralSettingsView: View {
                         Text("Next iteration").tag(false)
                     }
                     .pickerStyle(.radioGroup)
+                }
+
+                Divider()
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Focus time", isOn: focusTimeEnabledBinding)
+                        .toggleStyle(.checkbox)
+                        .font(.callout.weight(.semibold))
+
+                    Text("Choose what Loop should allow during this daily block.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 12) {
+                        DatePicker(
+                            "From",
+                            selection: focusTimeStartBinding,
+                            displayedComponents: .hourAndMinute
+                        )
+
+                        DatePicker(
+                            "To",
+                            selection: focusTimeEndBinding,
+                            displayedComponents: .hourAndMinute
+                        )
+                    }
+                    .disabled(!store.focusTimeSchedule.isEnabled)
+
+                    if store.focusTimeSchedule.startTime == store.focusTimeSchedule.endTime {
+                        Text("Choose different start and end times.")
+                            .font(.caption)
+                            .foregroundStyle(Color(nsColor: .systemOrange))
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Include routines in iterations", isOn: focusTimeIncludesRoutinesBinding)
+                            .toggleStyle(.checkbox)
+
+                        Toggle("Allow breaks", isOn: focusTimeAllowsBreaksBinding)
+                            .toggleStyle(.checkbox)
+
+                        Toggle("Ask before pausing for detected meetings", isOn: focusTimeConfirmsMeetingsBinding)
+                            .toggleStyle(.checkbox)
+                    }
+                    .disabled(!store.focusTimeSchedule.isEnabled)
                 }
 
                 Divider()
@@ -2900,6 +3056,69 @@ private struct GeneralSettingsView: View {
         Binding(
             get: { store.newTasksStartInCurrentIteration },
             set: { store.setNewTasksStartInCurrentIteration($0) }
+        )
+    }
+
+    private var focusTimeEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { store.focusTimeSchedule.isEnabled },
+            set: { store.setFocusTimeEnabled($0) }
+        )
+    }
+
+    private var focusTimeStartBinding: Binding<Date> {
+        focusTimeBinding(
+            get: { store.focusTimeSchedule.startTime },
+            set: { store.setFocusTimeStart($0) }
+        )
+    }
+
+    private var focusTimeEndBinding: Binding<Date> {
+        focusTimeBinding(
+            get: { store.focusTimeSchedule.endTime },
+            set: { store.setFocusTimeEnd($0) }
+        )
+    }
+
+    private var focusTimeIncludesRoutinesBinding: Binding<Bool> {
+        Binding(
+            get: { store.focusTimeSchedule.includesRoutines },
+            set: { store.setFocusTimeIncludesRoutines($0) }
+        )
+    }
+
+    private var focusTimeAllowsBreaksBinding: Binding<Bool> {
+        Binding(
+            get: { store.focusTimeSchedule.allowsBreaks },
+            set: { store.setFocusTimeAllowsBreaks($0) }
+        )
+    }
+
+    private var focusTimeConfirmsMeetingsBinding: Binding<Bool> {
+        Binding(
+            get: { store.focusTimeSchedule.confirmsMeetings },
+            set: { store.setFocusTimeConfirmsMeetings($0) }
+        )
+    }
+
+    private func focusTimeBinding(
+        get: @escaping () -> DailyScheduleTime,
+        set: @escaping (DailyScheduleTime) -> Void
+    ) -> Binding<Date> {
+        Binding(
+            get: {
+                let time = get()
+                return Calendar.current.date(
+                    bySettingHour: time.hour,
+                    minute: time.minute,
+                    second: 0,
+                    of: store.currentDate
+                ) ?? store.currentDate
+            },
+            set: { date in
+                let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+                set(DailyScheduleTime(hour: components.hour ?? 0, minute: components.minute ?? 0))
+            }
         )
     }
 
@@ -2972,6 +3191,7 @@ private struct StatisticsView: View {
                         activeWindowText: activeWindowText,
                         iterationsCount: iterationsCount,
                         finishedCount: finishedCount,
+                        averageIterationDurationText: averageIterationDurationText,
                         averageText: averageText,
                         finishedStats: finishedStats
                     )
@@ -2980,9 +3200,14 @@ private struct StatisticsView: View {
                         WeekSummaryView(days: weekSummaryDays, style: .productivity)
                     }
 
+                    if scope == .day {
+                        DayTimelineView(entries: dayTimelineEntries, date: selectedDate)
+                    }
+
                 case .details:
                     LazyVGrid(columns: columns, spacing: 10) {
                         StatTile(title: "Iterations", value: "\(iterationsCount)", systemImage: "arrow.triangle.2.circlepath")
+                        StatTile(title: "Avg Iteration Time", value: averageIterationDurationText, systemImage: "timer")
                         StatTile(title: "Finished", value: "\(finishedCount)", systemImage: "checkmark.seal")
                         StatTile(title: "Breaks", value: "\(breakCount)", systemImage: "cup.and.saucer")
                         StatTile(title: "Break time", value: breakDurationText, systemImage: "timer")
@@ -3012,6 +3237,10 @@ private struct StatisticsView: View {
 
                     if scope == .week {
                         WeekSummaryView(days: weekSummaryDays, style: .full)
+                    }
+
+                    if scope == .day {
+                        DayTimelineView(entries: dayTimelineEntries, date: selectedDate)
                     }
 
                     TaskSection(title: "Finished Tasks", tasks: finishedStats, emptyTitle: "No finished tasks") { stat in
@@ -3099,6 +3328,17 @@ private struct StatisticsView: View {
         case .week: store.tasksFinished(in: selectedWeekInterval).count
         case .total: store.completedTaskStats.count
         }
+    }
+
+    private var averageIterationDurationText: String {
+        let duration: TimeInterval?
+        switch scope {
+        case .day: duration = store.averageIterationDuration(on: selectedDate)
+        case .week: duration = store.averageIterationDuration(in: selectedWeekInterval)
+        case .total: duration = store.averageIterationDuration
+        }
+        guard let duration else { return "-" }
+        return IterationDurationFormatter.string(from: duration)
     }
 
     private var breakCount: Int {
@@ -3278,6 +3518,10 @@ private struct StatisticsView: View {
         }
     }
 
+    private var dayTimelineEntries: [DayTimelineEntry] {
+        store.dayTimeline(on: selectedDate)
+    }
+
     private var referenceCount: Int {
         switch scope {
         case .day: store.completedTaskStats.count
@@ -3431,6 +3675,7 @@ private struct StatisticsSummaryView: View {
     let activeWindowText: String?
     let iterationsCount: Int
     let finishedCount: Int
+    let averageIterationDurationText: String
     let averageText: String
     let finishedStats: [TaskCompletionStat]
 
@@ -3465,6 +3710,7 @@ private struct StatisticsSummaryView: View {
                     SummaryFactRow(title: "Active window", value: activeWindowText, systemImage: "sun.max")
                 }
                 SummaryFactRow(title: "Output", value: "\(iterationsCount) loops · \(finishedCount) finished", systemImage: "arrow.triangle.2.circlepath")
+                SummaryFactRow(title: "Average iteration", value: averageIterationDurationText, systemImage: "timer")
                 SummaryFactRow(title: "Scheduled", value: "\(routineCount) routines · \(meetingCount) meetings · \(breakCount) breaks", systemImage: "pause.circle")
                 SummaryFactRow(title: "Average", value: "\(averageText) iterations / task", systemImage: "chart.bar")
             }
@@ -3687,6 +3933,393 @@ private struct WeekSummaryDay: Identifiable, Equatable {
     var routineDuration: TimeInterval
     var activeDuration: TimeInterval
     var productiveDuration: TimeInterval
+}
+
+private struct DayTimelineView: View {
+    let entries: [DayTimelineEntry]
+    let date: Date
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Day Timeline")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            VStack(spacing: 0) {
+                DayTimelineOverview(entries: entries, date: date)
+                    .padding(.vertical, 12)
+
+                Divider()
+
+                if entries.isEmpty {
+                    VStack(spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text("No activity recorded")
+                            .font(.callout.weight(.semibold))
+                        Text("Tracked work, breaks, meetings, routines, and completions will appear here.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                } else {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        DayTimelineRow(entry: entry, isLast: index == entries.count - 1)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+}
+
+private struct DayTimelineOverview: View {
+    let entries: [DayTimelineEntry]
+    let date: Date
+
+    @State private var hoveredSegmentID: String?
+
+    private var intervalEntries: [(entry: DayTimelineEntry, interval: DateInterval)] {
+        guard let day = Calendar.current.dateInterval(of: .day, for: date) else { return [] }
+        return entries.compactMap { entry in
+            guard let endedAt = entry.endedAt,
+                  let clipped = TimeTracking.clippedInterval(start: entry.startedAt, end: endedAt, to: day)
+            else { return nil }
+            return (entry, clipped)
+        }
+    }
+
+    private var timelineBounds: DateInterval? {
+        guard let first = intervalEntries.map(\.interval.start).min(),
+              let last = intervalEntries.map(\.interval.end).max(),
+              last > first
+        else { return nil }
+        return DateInterval(start: first, end: last)
+    }
+
+    private var segments: [DayTimelineOverviewSegment] {
+        guard let timelineBounds else { return [] }
+        var boundaries = [timelineBounds.start, timelineBounds.end]
+        boundaries.append(contentsOf: intervalEntries.flatMap { [$0.interval.start, $0.interval.end] })
+        boundaries = Array(Set(boundaries)).sorted()
+
+        let rawSegments = zip(boundaries, boundaries.dropFirst()).compactMap { start, end -> DayTimelineOverviewSegment? in
+            guard end > start else { return nil }
+            let midpoint = start.addingTimeInterval(end.timeIntervalSince(start) / 2)
+            let kind = intervalEntries
+                .filter { $0.interval.contains(midpoint) }
+                .map { DayTimelineOverviewKind(entryKind: $0.entry.kind) }
+                .max(by: { $0.priority < $1.priority })
+                ?? .inactive
+            return DayTimelineOverviewSegment(start: start, end: end, kind: kind)
+        }
+
+        var consolidated = rawSegments.reduce(into: [DayTimelineOverviewSegment]()) { result, segment in
+            if let previous = result.last,
+               previous.kind == segment.kind,
+               previous.end == segment.start {
+                result[result.count - 1].end = segment.end
+            } else {
+                result.append(segment)
+            }
+        }
+
+        let maximumTrackingSplit: TimeInterval = 60
+        while let gapIndex = consolidated.indices.dropFirst().dropLast().first(where: { index in
+            let gap = consolidated[index]
+            return gap.kind == .inactive
+                && gap.duration <= maximumTrackingSplit
+                && consolidated[index - 1].kind == consolidated[index + 1].kind
+                && consolidated[index - 1].kind != .inactive
+        }) {
+            let combined = DayTimelineOverviewSegment(
+                start: consolidated[gapIndex - 1].start,
+                end: consolidated[gapIndex + 1].end,
+                kind: consolidated[gapIndex - 1].kind
+            )
+            consolidated.replaceSubrange((gapIndex - 1)...(gapIndex + 1), with: [combined])
+        }
+
+        return consolidated
+    }
+
+    private let legendKinds: [DayTimelineOverviewKind] = [
+        .focusedWork, .activeWork, .routine, .meeting, .breakTime, .inactive
+    ]
+
+    private var hoveredSegment: DayTimelineOverviewSegment? {
+        segments.first { $0.id == hoveredSegmentID }
+    }
+
+    private var timelineDuration: TimeInterval {
+        max(timelineBounds?.duration ?? 0, 1)
+    }
+
+    private var tickDates: [Date] {
+        guard let timelineBounds else { return [] }
+        return [0.0, 0.25, 0.5, 0.75, 1.0].map { fraction in
+            timelineBounds.start.addingTimeInterval(timelineBounds.duration * fraction)
+        }
+    }
+
+    private var summaryText: String {
+        if let hoveredSegment {
+            return hoveredSegment.detailText
+        }
+        guard let timelineBounds else { return "No timed activity" }
+        return "\(StatisticsDateFormatter.time.string(from: timelineBounds.start))–\(StatisticsDateFormatter.time.string(from: timelineBounds.end))"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack {
+                Text("Overview")
+                    .font(.callout.weight(.semibold))
+
+                Spacer()
+
+                Text(summaryText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+
+            if timelineBounds == nil {
+                Text("Start tracking work, a routine, meeting, or break to create an overview.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+            } else {
+                GeometryReader { proxy in
+                    HStack(spacing: 0) {
+                        ForEach(segments) { segment in
+                            Rectangle()
+                                .fill(segment.kind.color)
+                                .opacity(hoveredSegmentID == nil || hoveredSegmentID == segment.id ? 1 : 0.55)
+                                .overlay {
+                                    if hoveredSegmentID == segment.id {
+                                        Rectangle()
+                                            .stroke(Color.primary.opacity(0.7), lineWidth: 2)
+                                    }
+                                }
+                                .frame(width: proxy.size.width * CGFloat(segment.duration / timelineDuration))
+                                .contentShape(Rectangle())
+                                .onHover { isHovering in
+                                    if isHovering {
+                                        hoveredSegmentID = segment.id
+                                    } else if hoveredSegmentID == segment.id {
+                                        hoveredSegmentID = nil
+                                    }
+                                }
+                                .help(segment.detailText)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(Color.secondary.opacity(0.16), lineWidth: 1)
+                    }
+                }
+                .frame(height: 18)
+
+                HStack {
+                    ForEach(Array(tickDates.enumerated()), id: \.offset) { index, tick in
+                        Text(StatisticsDateFormatter.time.string(from: tick))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        if index < tickDates.count - 1 {
+                            Spacer()
+                        }
+                    }
+                }
+
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 82), spacing: 8)],
+                    alignment: .leading,
+                    spacing: 6
+                ) {
+                    ForEach(legendKinds) { kind in
+                        HStack(spacing: 5) {
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(kind.color)
+                                .frame(width: 10, height: 7)
+                            Text(kind.title)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DayTimelineOverviewSegment: Identifiable {
+    var start: Date
+    var end: Date
+    let kind: DayTimelineOverviewKind
+
+    var id: String {
+        "\(start.timeIntervalSinceReferenceDate)-\(kind.id)"
+    }
+
+    var duration: TimeInterval {
+        max(0, end.timeIntervalSince(start))
+    }
+
+    var detailText: String {
+        let startText = StatisticsDateFormatter.time.string(from: start)
+        let endText = StatisticsDateFormatter.time.string(from: end)
+        let durationText = StatisticsDurationFormatter.string(from: duration)
+        return "\(kind.title) · \(startText)–\(endText) · \(durationText)"
+    }
+}
+
+private enum DayTimelineOverviewKind: String, Identifiable {
+    case focusedWork
+    case activeWork
+    case routine
+    case meeting
+    case breakTime
+    case inactive
+
+    var id: String { rawValue }
+
+    init(entryKind: DayTimelineEntryKind) {
+        switch entryKind {
+        case .focusedWork: self = .focusedWork
+        case .activeWork: self = .activeWork
+        case .routine: self = .routine
+        case .meeting: self = .meeting
+        case .breakTime: self = .breakTime
+        case .loopCompleted, .taskFinished: self = .inactive
+        }
+    }
+
+    var priority: Int {
+        switch self {
+        case .breakTime: 5
+        case .meeting: 4
+        case .routine: 3
+        case .focusedWork: 2
+        case .activeWork: 1
+        case .inactive: 0
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .focusedWork: "Focus"
+        case .activeWork: "Active"
+        case .routine: "Routine"
+        case .meeting: "Meeting"
+        case .breakTime: "Break"
+        case .inactive: "Inactive"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .focusedWork: .accentColor
+        case .activeWork: Color(nsColor: .systemPurple)
+        case .routine: Color(nsColor: .systemTeal)
+        case .meeting: Color(nsColor: .systemBlue)
+        case .breakTime: Color(nsColor: .systemOrange)
+        case .inactive: Color.secondary.opacity(0.28)
+        }
+    }
+}
+
+private struct DayTimelineRow: View {
+    let entry: DayTimelineEntry
+    let isLast: Bool
+
+    private var color: Color {
+        switch entry.kind {
+        case .focusedWork: .accentColor
+        case .activeWork: Color(nsColor: .systemPurple)
+        case .routine: Color(nsColor: .systemTeal)
+        case .meeting: Color(nsColor: .systemBlue)
+        case .breakTime: Color(nsColor: .systemOrange)
+        case .loopCompleted: Color(nsColor: .systemGreen)
+        case .taskFinished: Color(nsColor: .systemGreen)
+        }
+    }
+
+    private var systemImage: String {
+        switch entry.kind {
+        case .focusedWork: "scope"
+        case .activeWork: "desktopcomputer"
+        case .routine: "clock.badge.checkmark"
+        case .meeting: "video"
+        case .breakTime: "cup.and.saucer"
+        case .loopCompleted: "arrow.triangle.2.circlepath"
+        case .taskFinished: "checkmark.seal"
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(StatisticsDateFormatter.time.string(from: entry.startedAt))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 54, alignment: .trailing)
+                .padding(.top, 11)
+
+            VStack(spacing: 0) {
+                ZStack {
+                    Circle()
+                        .fill(color.opacity(0.16))
+                        .frame(width: 24, height: 24)
+                    Image(systemName: systemImage)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(color)
+                }
+
+                if !isLast {
+                    Rectangle()
+                        .fill(Color.secondary.opacity(0.2))
+                        .frame(width: 1)
+                        .frame(minHeight: 28)
+                }
+            }
+            .padding(.top, 7)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(2)
+
+                Text(detailText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .padding(.vertical, 9)
+
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var detailText: String {
+        guard let endedAt = entry.endedAt, let duration = entry.duration else {
+            return switch entry.kind {
+            case .loopCompleted: "Loop completed"
+            case .taskFinished: "Task finished"
+            default: "Recorded"
+            }
+        }
+        return "Until \(StatisticsDateFormatter.time.string(from: endedAt)) · \(StatisticsDurationFormatter.string(from: duration))"
+    }
 }
 
 private struct WeekSummaryView: View {
@@ -4279,6 +4912,16 @@ private enum StatisticsDurationFormatter {
 
     static func string(from duration: TimeInterval) -> String {
         compact.string(from: max(0, duration)) ?? "0m"
+    }
+}
+
+enum IterationDurationFormatter {
+    static func string(from duration: TimeInterval) -> String {
+        let duration = max(0, duration)
+        if duration < 60 {
+            return "\(Int(duration.rounded()))s"
+        }
+        return StatisticsDurationFormatter.string(from: duration)
     }
 }
 

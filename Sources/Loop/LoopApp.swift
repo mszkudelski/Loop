@@ -60,7 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var nextTimerExpirationBannerAt: Date?
     private var quickAddWindow: NSPanel?
     private var quickAddDraft = ""
+    private var quickAddShouldReturnToBackground = false
     private var taskManagerWindow: NSWindow?
+    private var morningPlanWindow: NSWindow?
     private var settingsWindow: NSWindow?
     private var instanceLock: SingleInstanceLock?
     private var activityGate = InteractiveActivityGate(
@@ -70,9 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private var didFinishLaunching = false
     private var trackingIsInteractive = false
+    private var isAwaitingInitialMeetingEvaluation = false
+    private var deferredTaskFocusBannerID: UUID?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        instanceLock = SingleInstanceLock(bundleIdentifier: Bundle.main.bundleIdentifier ?? "local.loop.menubar")
+        instanceLock = SingleInstanceLock(bundleIdentifier: Bundle.main.bundleIdentifier ?? "com.marekszkudelski.loop")
         if instanceLock == nil {
             NSApp.terminate(nil)
         }
@@ -80,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard instanceLock != nil else { return }
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
         configureStatusItem()
         configurePopover()
         configureHotKey()
@@ -138,14 +142,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.performTrayPrimaryAction()
             },
             onSelectTask: { [weak self] task in
-                self?.store.focus(task)
-                self?.closePopover()
+                guard let self else { return }
+                if self.store.isMorningRoutineRequired {
+                    self.showMorningPlanWindow()
+                } else {
+                    self.store.focus(task)
+                    self.closePopover()
+                }
             },
             onEditTask: { [weak self] task in
                 self?.showTaskEditor(task)
             },
+            onSelectRoutine: { [weak self] routine in
+                self?.store.startRoutineBlock(routine)
+                self?.closePopover()
+            },
+            onEditRoutine: { [weak self] routine in
+                self?.showRoutineEditor(routine)
+            },
             onOpenTaskManager: { [weak self] in
                 self?.showTaskManagerWindow()
+            },
+            onOpenMorningPlan: { [weak self] in
+                self?.showMorningPlanWindow()
             },
             onOpenSettings: { [weak self] in
                 self?.showSettingsWindow(initialSection: .general)
@@ -215,7 +234,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.store.isOnBreak {
                 self.store.endBreak()
             } else {
-                self.store.startBreak()
+                self.requestBreak()
             }
         }
     }
@@ -313,8 +332,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
             DispatchQueue.main.async {
-                self?.noteInteractiveActivity()
-                self?.closePopover()
+                guard let self else { return }
+                self.noteInteractiveActivity()
+                self.closePopover()
+                if self.quickAddWindow?.isVisible == true {
+                    self.dismissQuickAddWindow()
+                }
             }
         }
     }
@@ -336,13 +359,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func reconcileInteractiveTracking() {
         guard didFinishLaunching else { return }
         if activityGate.isInteractive {
-            store.resumeInteractiveTracking()
             if !trackingIsInteractive {
                 trackingIsInteractive = true
+                isAwaitingInitialMeetingEvaluation = true
                 meetingMonitor.start()
             }
+            store.resumeInteractiveTracking()
         } else {
             store.suspendTracking()
+            isAwaitingInitialMeetingEvaluation = false
+            deferredTaskFocusBannerID = nil
             if trackingIsInteractive {
                 trackingIsInteractive = false
                 meetingMonitor.suspend()
@@ -384,8 +410,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureMeetingMonitor() {
         meetingMonitor.onMeetingStateChange = { [weak self] isActive in
-            self?.store.setMeetingActive(isActive)
+            self?.handleMeetingStateChange(isActive)
         }
+        meetingMonitor.onInitialEvaluationComplete = { [weak self] in
+            self?.handleInitialMeetingEvaluationComplete()
+        }
+    }
+
+    private func handleInitialMeetingEvaluationComplete() {
+        isAwaitingInitialMeetingEvaluation = false
+        guard !store.isInMeeting else {
+            deferredTaskFocusBannerID = nil
+            dismissFocusBanner()
+            return
+        }
+        guard let taskID = deferredTaskFocusBannerID else { return }
+        deferredTaskFocusBannerID = nil
+        guard store.focusedTask?.id == taskID else { return }
+        showFocusStartedBanner(.task(taskID))
+    }
+
+    private func handleMeetingStateChange(_ isActive: Bool) {
+        guard isActive else {
+            store.setMeetingActive(false)
+            return
+        }
+
+        if store.isFocusTimeActive,
+           store.focusTimeSchedule.confirmsMeetings,
+           !confirmFocusTimeInterruption(
+               title: "Pause focus for this meeting?",
+               message: "Loop detected a meeting. Entering meeting mode will pause productive task focus until the meeting ends.",
+               continueTitle: "Enter Meeting"
+           ) {
+            meetingMonitor.suppressCurrentMeetingUntilInactive()
+            return
+        }
+
+        deferredTaskFocusBannerID = nil
+        dismissFocusBanner()
+        store.setMeetingActive(true)
     }
 
     private func configureStatusTitleUpdates() {
@@ -409,7 +473,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        false
+        showTaskManagerWindow()
+        return true
     }
 
     func applicationDidResignActive(_ notification: Notification) {
@@ -500,11 +565,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return image
     }
 
-    @objc private func endMeetingModeFromStatusMenu(_ sender: Any?) {
-        meetingMonitor.suppressCurrentMeetingUntilInactive()
-        store.endMeetingManually()
-    }
-
     @objc private func endRoutineFromStatusMenu(_ sender: Any?) {
         store.endRoutineBlock()
     }
@@ -514,23 +574,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func performTrayPrimaryAction() {
-        if store.isInMeeting {
-            meetingMonitor.suppressCurrentMeetingUntilInactive()
-            store.endMeetingManually()
-            return
-        }
-
         if store.isOnBreak {
             store.endBreak()
             return
         }
 
         if store.isInRoutine {
-            store.endRoutineBlock()
+            requestBreak()
             return
         }
 
+        requestBreak()
+    }
+
+    private func requestBreak() {
+        closePopover()
+        if store.isFocusTimeActive, !store.focusTimeSchedule.allowsBreaks {
+            showFocusTimeRestriction(
+                title: "Breaks are disabled during focus time",
+                message: "End focus for today or enable breaks in Focus Time settings before starting one."
+            )
+            return
+        }
+        if store.isFocusTimeActive,
+           !confirmFocusTimeInterruption(
+               title: "Go on a break?",
+               message: "Focus time is active until \(focusTimeEndText). Starting a break will pause productive task focus.",
+               continueTitle: "Start Break"
+           ) {
+            return
+        }
         store.startBreak()
+    }
+
+    private func confirmFocusTimeInterruption(
+        title: String,
+        message: String,
+        continueTitle: String
+    ) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: continueTitle)
+        alert.addButton(withTitle: "Keep Focusing")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func showFocusTimeRestriction(title: String, message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "Keep Focusing")
+        alert.runModal()
+    }
+
+    private var focusTimeEndText: String {
+        let endTime = store.focusTimeSchedule.endTime
+        let date = Calendar.current.date(
+            bySettingHour: endTime.hour,
+            minute: endTime.minute,
+            second: 0,
+            of: Date()
+        ) ?? Date()
+        return date.formatted(date: .omitted, time: .shortened)
     }
 
     private func completeCurrentFocus() {
@@ -606,6 +716,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func showRoutineEditor(_ routine: RoutineBlock) {
+        showTaskManagerWindow()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .loopShouldEditRoutine, object: routine.id)
+        }
+    }
+
     @objc private func toggleCurrentTaskPriorityFromStatusMenu(_ sender: Any?) {
         guard let task = store.focusedTask else { return }
         store.togglePriority(task)
@@ -673,6 +790,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? menuBarTitle(taskTitle: store.focusedTaskTitle, timerText: store.focusedTaskTimerText)
         button.title = title
         button.imagePosition = title.isEmpty ? .imageOnly : .imageLeft
+        button.setAccessibilityLabel(title.isEmpty ? "Loop" : "Loop, \(title)")
         button.toolTip = store.meetingTimerText
             ?? store.breakTimerText
             ?? store.routineTimerText
@@ -710,20 +828,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPopover() {
         guard let button = statusItem?.button else { return }
-        NSApp.activate(ignoringOtherApps: true)
         store.refreshCurrentDate()
         updatePopoverSize(for: button)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            NSApp.activate(ignoringOtherApps: true)
-            self.popover.contentViewController?.view.window?.makeKey()
+            guard
+                let self,
+                let popoverWindow = self.popover.contentViewController?.view.window
+            else { return }
+            popoverWindow.collectionBehavior.formUnion([
+                .canJoinAllSpaces,
+                .fullScreenAuxiliary,
+                .transient
+            ])
+            popoverWindow.level = .statusBar
+            popoverWindow.orderFrontRegardless()
         }
     }
 
     private func updatePopoverSize(for button: NSStatusBarButton) {
         let openTaskCount = store.currentLoopTasks.filter { !$0.doneThisLoop && !$0.finished }.count
-        let desiredHeight = CGFloat(275 + (max(openTaskCount, 1) * 35))
+        let openItemCount = openTaskCount + store.openRoutineBlocks.count
+        // The tray header has two rows (navigation plus metrics), so reserve
+        // enough fixed space before sizing the scrollable iteration queue.
+        let desiredHeight = CGFloat(310 + (max(openItemCount, 1) * 35))
         let availableHeight = (button.window?.screen?.visibleFrame.height ?? 800) - 96
         popover.contentSize = NSSize(width: 360, height: min(desiredHeight, availableHeight))
     }
@@ -749,6 +877,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             window.contentViewController = NSHostingController(rootView: LoopPanelView(
                 onChooseApplication: { [weak self] in
                     self?.chooseApplication()
+                },
+                onShowMorningPlan: { [weak self] in
+                    self?.showMorningPlanWindow()
                 }
             )
             .environmentObject(store))
@@ -766,13 +897,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
     }
 
-    private func showQuickAddWindow() {
+    private func showMorningPlanWindow() {
+        closePopover()
+        store.refreshCurrentDate()
+        store.prepareMorningRoutine()
+
+        if let morningPlanWindow, morningPlanWindow.isVisible {
+            NSApp.activate(ignoringOtherApps: true)
+            morningPlanWindow.deminiaturize(nil)
+            morningPlanWindow.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let window: NSWindow
+        if let morningPlanWindow {
+            window = morningPlanWindow
+        } else {
+            window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 560, height: 640),
+                styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                backing: .buffered,
+                defer: false
+            )
+            window.title = "Morning Plan"
+            window.contentMinSize = NSSize(width: 520, height: 560)
+            window.isReleasedWhenClosed = false
+            window.tabbingMode = .disallowed
+
+            let frameAutosaveName = "Loop.MorningPlanWindow"
+            if !window.setFrameUsingName(frameAutosaveName) {
+                window.center()
+            }
+            window.setFrameAutosaveName(frameAutosaveName)
+            morningPlanWindow = window
+        }
+
+        window.contentViewController = NSHostingController(rootView: MorningOnboardingView(
+            onChooseApplication: { [weak self] in
+                self?.chooseApplication()
+            },
+            onComplete: { [weak self] in
+                self?.morningPlanWindow?.close()
+            }
+        )
+        .environmentObject(store))
+        window.standardWindowButton(.closeButton)?.isEnabled = !store.isMorningRoutineRequired
+
         NSApp.activate(ignoringOtherApps: true)
+        window.deminiaturize(nil)
+        window.makeKeyAndOrderFront(nil)
+    }
+
+    private func showQuickAddWindow() {
+        quickAddShouldReturnToBackground = !hasVisibleApplicationWindow
 
         let panelSize = NSSize(width: 380, height: 62)
         let panel = quickAddWindow ?? QuickAddPanel(
             contentRect: NSRect(origin: .zero, size: panelSize),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -780,8 +962,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.titlebarAppearsTransparent = true
         panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.hidesOnDeactivate = true
+        panel.level = .statusBar
+        panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.setContentSize(panelSize)
         panel.contentView = NSHostingView(rootView: QuickAddTaskView(
@@ -791,7 +974,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.quickAddDraft = draft
             },
             onDismiss: { [weak self] in
-                self?.quickAddWindow?.close()
+                self?.dismissQuickAddWindow()
             }
         ))
         panel.center()
@@ -803,6 +986,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let textField = panel.contentView?.firstSubview(ofType: KeyHandlingTextField.self) else { return }
             panel.makeFirstResponder(textField)
         }
+    }
+
+    private var hasVisibleApplicationWindow: Bool {
+        taskManagerWindow?.isVisible == true
+            || morningPlanWindow?.isVisible == true
+            || settingsWindow?.isVisible == true
+    }
+
+    private func dismissQuickAddWindow() {
+        quickAddWindow?.close()
+        let shouldReturnToBackground = quickAddShouldReturnToBackground
+        quickAddShouldReturnToBackground = false
+        guard shouldReturnToBackground, !hasVisibleApplicationWindow else { return }
+        NSApp.hide(nil)
     }
 
     private func showSettingsWindow(initialSection: SettingsSection) {
@@ -819,7 +1016,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 defer: false
             )
             window.isReleasedWhenClosed = false
-            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             settingsWindow = window
         }
 
@@ -857,9 +1053,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .break:
             showBanner(
                 state: FocusBannerState(
+                    eyebrow: "Pause",
                     title: "Break started",
-                    subtitle: store.breakTimerText ?? "Take a break",
-                    systemImage: "cup.and.saucer.fill"
+                    detail: store.breakTimerText ?? "Take a moment to reset",
+                    systemImage: "cup.and.saucer.fill",
+                    kind: .breakTime
                 ),
                 onClick: {}
             )
@@ -873,6 +1071,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.dismissFocusBanner()
             }
         case .task(let taskID):
+            if isAwaitingInitialMeetingEvaluation {
+                deferredTaskFocusBannerID = taskID
+                return
+            }
             guard let task = store.tasks.first(where: { $0.id == taskID }) else { return }
             showBanner(state: FocusBannerState(task: task)) { [weak self] in
                 guard let self else { return }
@@ -923,9 +1125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showTimerExpiredBanner(for task: LoopTask) {
         showBanner(
             state: FocusBannerState(
+                eyebrow: "Timer",
                 title: "Time is up",
-                subtitle: task.title,
-                systemImage: "timer"
+                detail: task.title,
+                systemImage: "timer",
+                kind: .timerExpired
             ),
             onClick: {}
         )
@@ -934,7 +1138,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func showBanner(state: FocusBannerState, onClick: @escaping () -> Void) {
         let bannerView = FocusBannerView(state: state, onClick: onClick)
 
-        let bannerSize = NSSize(width: 390, height: 78)
+        let bannerSize = NSSize(width: 420, height: 92)
+        let isNewPanel = focusBannerWindow == nil
         let panel = focusBannerWindow ?? NSPanel(
             contentRect: NSRect(origin: .zero, size: bannerSize),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -945,7 +1150,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setContentSize(bannerSize)
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.alphaValue = 1
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
         panel.isFloatingPanel = true
@@ -953,31 +1157,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
-        panel.setFrame(focusBannerFrame(size: bannerSize), display: true)
+        let finalFrame = focusBannerFrame(size: bannerSize)
+        if isNewPanel {
+            let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            panel.alphaValue = 0
+            panel.setFrame(finalFrame.offsetBy(dx: 0, dy: reduceMotion ? 0 : 8), display: true)
+        } else {
+            panel.alphaValue = 1
+            panel.setFrame(finalFrame, display: true)
+        }
 
         focusBannerWindow = panel
         panel.orderFrontRegardless()
+
+        if isNewPanel {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.12 : 0.24
+                panel.animator().alphaValue = 1
+                panel.animator().setFrame(finalFrame, display: true)
+            }
+        }
 
         focusBannerDismissWorkItem?.cancel()
         let dismissWorkItem = DispatchWorkItem { [weak self] in
             self?.dismissFocusBanner()
         }
         focusBannerDismissWorkItem = dismissWorkItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.7, execute: dismissWorkItem)
+        let displayDuration: TimeInterval = state.isClickable ? 4.8 : 4.2
+        DispatchQueue.main.asyncAfter(deadline: .now() + displayDuration, execute: dismissWorkItem)
     }
 
     private func focusBannerFrame(size: NSSize) -> NSRect {
-        let visibleFrame = NSScreen.main?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? .zero
+        let visibleFrame = statusItem?.button?.window?.screen?.visibleFrame
+            ?? NSApp.keyWindow?.screen?.visibleFrame
+            ?? NSScreen.main?.visibleFrame
+            ?? NSScreen.screens.first?.visibleFrame
+            ?? .zero
         let x = visibleFrame.midX - (size.width / 2)
-        let y = visibleFrame.maxY - size.height - 128
+        let twoThirdsFromBottomCenterY = visibleFrame.minY + (visibleFrame.height * 2 / 3)
+        let idealY = twoThirdsFromBottomCenterY - (size.height / 2)
+        let y = min(
+            max(idealY, visibleFrame.minY + 24),
+            visibleFrame.maxY - size.height - 24
+        )
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     private func dismissFocusBanner() {
         focusBannerDismissWorkItem?.cancel()
         focusBannerDismissWorkItem = nil
-        focusBannerWindow?.close()
+        guard let panel = focusBannerWindow else { return }
         focusBannerWindow = nil
+
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            panel.close()
+            return
+        }
+
+        let finalFrame = panel.frame.offsetBy(dx: 0, dy: 6)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            panel.animator().alphaValue = 0
+            panel.animator().setFrame(finalFrame, display: true)
+        } completionHandler: {
+            Task { @MainActor in
+                panel.close()
+            }
+        }
     }
 }
 
@@ -1156,7 +1402,7 @@ private final class KeyHandlingTextField: NSTextField {
 
 private final class QuickAddPanel: NSPanel {
     override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 private extension NSView {
@@ -1180,52 +1426,103 @@ private struct TimerExpirationContext: Equatable {
     let startedAt: Date
 }
 
+private enum FocusBannerKind {
+    case focus
+    case routine
+    case breakTime
+    case timerExpired
+    case complete
+
+    var tint: Color {
+        switch self {
+        case .focus:
+            return Color(nsColor: .systemBlue)
+        case .routine:
+            return Color(nsColor: .systemIndigo)
+        case .breakTime:
+            return Color(nsColor: .systemMint)
+        case .timerExpired:
+            return Color(nsColor: .systemOrange)
+        case .complete:
+            return Color(nsColor: .systemGreen)
+        }
+    }
+
+    var secondaryTint: Color {
+        switch self {
+        case .focus:
+            return Color(nsColor: .systemCyan)
+        case .routine:
+            return Color(nsColor: .systemPurple)
+        case .breakTime:
+            return Color(nsColor: .systemTeal)
+        case .timerExpired:
+            return Color(nsColor: .systemYellow)
+        case .complete:
+            return Color(nsColor: .systemMint)
+        }
+    }
+}
+
 private struct FocusBannerState {
+    let eyebrow: String
     let title: String
-    let subtitle: String
+    let detail: String?
     let systemImage: String
+    let kind: FocusBannerKind
     let isClickable: Bool
 
-    init(title: String, subtitle: String, systemImage: String, isClickable: Bool = false) {
+    init(
+        eyebrow: String,
+        title: String,
+        detail: String? = nil,
+        systemImage: String,
+        kind: FocusBannerKind,
+        isClickable: Bool = false
+    ) {
+        self.eyebrow = eyebrow
         self.title = title
-        self.subtitle = subtitle
+        self.detail = detail
         self.systemImage = systemImage
+        self.kind = kind
         self.isClickable = isClickable
     }
 
     init(task: LoopTask?, routine: RoutineBlock? = nil) {
         if let task {
-            title = "Focus"
-            subtitle = [
-                task.title,
-                task.linkedApp?.name
-            ]
-            .compactMap { value in
-                let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmedValue?.isEmpty == false ? trimmedValue : nil
-            }
-            .joined(separator: " · ")
+            eyebrow = "Focus"
+            title = task.title
+            detail = Self.openDetail(for: task.linkedApp?.name)
             systemImage = "scope"
+            kind = .focus
             isClickable = task.linkedApp != nil
         } else if let routine {
-            title = "Routine"
-            subtitle = [
-                routine.title,
-                routine.linkedApp?.name
-            ]
-            .compactMap { value in
-                let trimmedValue = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return trimmedValue?.isEmpty == false ? trimmedValue : nil
-            }
-            .joined(separator: " · ")
+            eyebrow = "Routine"
+            title = routine.title
+            detail = Self.openDetail(for: routine.linkedApp?.name)
             systemImage = "clock.badge.checkmark"
+            kind = .routine
             isClickable = routine.linkedApp != nil
         } else {
+            eyebrow = "Loop"
             title = "Iteration complete"
-            subtitle = "No task is waiting"
+            detail = "No task is waiting"
             systemImage = "checkmark.circle.fill"
+            kind = .complete
             isClickable = false
         }
+    }
+
+    var accessibilityLabel: String {
+        [eyebrow, title, detail]
+            .compactMap { $0 }
+            .joined(separator: ", ")
+    }
+
+    private static func openDetail(for appName: String?) -> String? {
+        guard let appName else { return nil }
+        let trimmedName = appName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? nil : "Open \(trimmedName)"
     }
 }
 
@@ -1233,54 +1530,216 @@ private struct FocusBannerView: View {
     let state: FocusBannerState
     let onClick: () -> Void
 
-    var body: some View {
-        HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                .fill(Color.accentColor)
-                .frame(width: 5, height: 50)
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @State private var isHovered = false
 
+    @ViewBuilder
+    var body: some View {
+        if state.isClickable {
+            Button(action: onClick) {
+                bannerSurface
+            }
+            .buttonStyle(FocusBannerButtonStyle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            .accessibilityLabel(Text(state.accessibilityLabel))
+            .accessibilityHint(Text("Opens the linked app"))
+        } else {
+            bannerSurface
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(Text(state.accessibilityLabel))
+        }
+    }
+
+    private var bannerSurface: some View {
+        ZStack {
+            liquidAtmosphere
+
+            HStack(spacing: 13) {
+                iconLens
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.eyebrow.uppercased())
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(state.kind.tint)
+
+                    Text(state.title)
+                        .font(.system(size: 15.5, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
+
+                    if let detail = state.detail {
+                        Text(detail)
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if state.isClickable {
+                    actionLens
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .frame(width: 420, height: 92)
+        .modifier(
+            FocusBannerSurfaceModifier(
+                tint: state.kind.tint,
+                isInteractive: state.isClickable,
+                reduceTransparency: reduceTransparency
+            )
+        )
+        .overlay {
+            bannerShape
+                .strokeBorder(borderGradient, lineWidth: colorSchemeContrast == .increased ? 1.25 : 0.8)
+        }
+        .contentShape(bannerShape)
+        .scaleEffect(isHovered ? 1.008 : 1)
+        .animation(.easeOut(duration: 0.16), value: isHovered)
+    }
+
+    private var iconLens: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            state.kind.tint.opacity(colorScheme == .dark ? 0.30 : 0.20),
+                            state.kind.secondaryTint.opacity(colorScheme == .dark ? 0.16 : 0.10)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [.white.opacity(0.28), .clear],
+                        startPoint: .top,
+                        endPoint: .center
+                    )
+                )
+
+            Circle()
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [.white.opacity(0.58), state.kind.tint.opacity(0.18)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.8
+                )
+
+            Image(systemName: state.systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(state.kind.tint)
+        }
+        .frame(width: 46, height: 46)
+        .shadow(color: state.kind.tint.opacity(colorScheme == .dark ? 0.20 : 0.12), radius: 8, y: 3)
+    }
+
+    private var actionLens: some View {
+        ZStack {
+            Circle()
+                .fill(Color.primary.opacity(isHovered ? 0.10 : 0.06))
+
+            Circle()
+                .strokeBorder(Color.primary.opacity(isHovered ? 0.14 : 0.08), lineWidth: 0.8)
+
+            Image(systemName: "arrow.up.right")
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(isHovered ? state.kind.tint : Color.secondary)
+        }
+        .frame(width: 32, height: 32)
+    }
+
+    private var liquidAtmosphere: some View {
+        GeometryReader { geometry in
             ZStack {
                 Circle()
-                    .fill(Color.accentColor.opacity(0.12))
-                Image(systemName: state.systemImage)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 40, height: 40)
+                    .fill(state.kind.tint.opacity(reduceTransparency ? 0.05 : 0.10))
+                    .frame(width: geometry.size.width * 0.52)
+                    .blur(radius: 28)
+                    .offset(x: -geometry.size.width * 0.35, y: -geometry.size.height * 0.24)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(state.title)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Color.black.opacity(0.48))
-                    .textCase(.uppercase)
-                Text(state.subtitle)
-                    .font(.callout.weight(.bold))
-                    .foregroundStyle(Color.black.opacity(0.9))
-                    .lineLimit(1)
-            }
+                Circle()
+                    .fill(state.kind.secondaryTint.opacity(reduceTransparency ? 0.035 : 0.07))
+                    .frame(width: geometry.size.width * 0.42)
+                    .blur(radius: 32)
+                    .offset(x: geometry.size.width * 0.38, y: geometry.size.height * 0.32)
 
-            Spacer(minLength: 0)
-
-            if state.isClickable {
-                Image(systemName: "arrow.up.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color.black.opacity(0.42))
+                LinearGradient(
+                    colors: [.white.opacity(colorScheme == .dark ? 0.08 : 0.20), .clear, .clear],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(width: 390, height: 78)
-        .background(Color(red: 0.97, green: 0.98, blue: 0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.black.opacity(0.12), lineWidth: 1)
+        .clipShape(bannerShape)
+        .allowsHitTesting(false)
+    }
+
+    private var borderGradient: LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: .white.opacity(colorScheme == .dark ? 0.30 : 0.72), location: 0),
+                .init(color: .white.opacity(colorScheme == .dark ? 0.08 : 0.18), location: 0.46),
+                .init(color: .primary.opacity(colorSchemeContrast == .increased ? 0.24 : 0.10), location: 1)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    private var bannerShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+    }
+}
+
+private struct FocusBannerSurfaceModifier: ViewModifier {
+    let tint: Color
+    let isInteractive: Bool
+    let reduceTransparency: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content
+                .background(Color(nsColor: .windowBackgroundColor), in: bannerShape)
+                .background(tint.opacity(0.06), in: bannerShape)
+        } else if #available(macOS 26.0, *) {
+            content
+                .glassEffect(
+                    .regular.tint(tint.opacity(0.10)).interactive(isInteractive),
+                    in: bannerShape
+                )
+        } else {
+            content
+                .background(.regularMaterial, in: bannerShape)
         }
-        .shadow(color: .black.opacity(0.22), radius: 18, y: 10)
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onTapGesture {
-            if state.isClickable {
-                onClick()
-            }
-        }
+    }
+
+    private var bannerShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: 24, style: .continuous)
+    }
+}
+
+private struct FocusBannerButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.987 : 1)
+            .opacity(configuration.isPressed ? 0.94 : 1)
+            .animation(.easeOut(duration: 0.10), value: configuration.isPressed)
     }
 }
