@@ -55,6 +55,10 @@ final class TaskStore: ObservableObject {
         didSet { save() }
     }
 
+    @Published private(set) var currentIterationStartedAt = Date() {
+        didSet { save() }
+    }
+
     @Published private(set) var breakSessions: [BreakSession] = [] {
         didSet { save() }
     }
@@ -96,6 +100,12 @@ final class TaskStore: ObservableObject {
     @Published private(set) var newTasksStartInCurrentIteration = true {
         didSet { save() }
     }
+    @Published private(set) var focusTimeSchedule = FocusTimeSchedule() {
+        didSet { save() }
+    }
+    @Published private(set) var focusTimeSuppressedUntil: Date? {
+        didSet { save() }
+    }
 
     @Published private(set) var focusedTaskID: UUID? {
         didSet { save() }
@@ -112,6 +122,14 @@ final class TaskStore: ObservableObject {
     }
 
     @Published private(set) var morningOnboardingShownAt: Date? {
+        didSet { save() }
+    }
+
+    @Published private(set) var morningRoutineStartedAt: Date? {
+        didSet { save() }
+    }
+
+    @Published private(set) var morningRoutineEnabled = true {
         didSet { save() }
     }
 
@@ -183,11 +201,24 @@ final class TaskStore: ObservableObject {
     private var lastAwakeUptime = ProcessInfo.processInfo.systemUptime
     private var trackingHeartbeatAt: Date?
     private var isLoading = false
+    private let defaults: UserDefaults
 
-    init() {
+    init(defaults: UserDefaults = .standard, migrateLegacyDefaults: Bool = true) {
+        self.defaults = defaults
+        if migrateLegacyDefaults {
+            migrateLegacyDefaultsIfNeeded()
+        }
         load()
         startSnoozeRefreshTimer()
         startCountdownRefreshTimer()
+    }
+
+    private func migrateLegacyDefaultsIfNeeded() {
+        guard defaults.data(forKey: defaultsKey) == nil,
+              let legacyDefaults = UserDefaults(suiteName: "local.loop.menubar"),
+              let legacyData = legacyDefaults.data(forKey: defaultsKey)
+        else { return }
+        defaults.set(legacyData, forKey: defaultsKey)
     }
 
     var activeTasks: [LoopTask] {
@@ -217,7 +248,8 @@ final class TaskStore: ObservableObject {
     }
 
     var currentFocusTaskID: UUID? {
-        guard !isOnBreak, !isInMeeting else { return nil }
+        guard !isOnBreak, !isInMeeting, !isInRoutine else { return nil }
+        guard !isMorningRoutineRequired else { return nil }
         let currentTasks = currentLoopTasks
 
         if let focusedTaskID,
@@ -266,13 +298,19 @@ final class TaskStore: ObservableObject {
         activeRoutineBlockID != nil && activeRoutineStartedAt != nil
     }
 
+    var isFocusTimeActive: Bool {
+        guard focusTimeSchedule.contains(currentDate) else { return false }
+        return focusTimeSuppressedUntil.map { currentDate >= $0 } ?? true
+    }
+
     var activeRoutineBlock: RoutineBlock? {
         guard let activeRoutineBlockID else { return nil }
         return routineBlocks.first { $0.id == activeRoutineBlockID }
     }
 
     var dueRoutineBlocks: [RoutineBlock] {
-        orderedRoutines(routineBlocks.filter(isRoutineDue))
+        guard !isFocusTimeActive || focusTimeSchedule.includesRoutines else { return [] }
+        return orderedRoutines(routineBlocks.filter(isRoutineDue))
     }
 
     var openRoutineBlocks: [RoutineBlock] {
@@ -291,16 +329,12 @@ final class TaskStore: ObservableObject {
 
     var breakRemainingSeconds: Int {
         guard let breakUntil else { return 0 }
-        return max(0, Int(ceil(breakUntil.timeIntervalSince(currentDate))))
+        return Int(ceil(breakUntil.timeIntervalSince(currentDate)))
     }
 
     var breakTimerText: String? {
         guard isOnBreak else { return nil }
-        if isBreakTimeUp {
-            return "Break done"
-        }
-        let minutes = max(0, Int(ceil(Double(breakRemainingSeconds) / 60.0)))
-        return "Break \(minutes)m"
+        return "Break \(Self.timerText(forRemainingSeconds: breakRemainingSeconds))"
     }
 
     var breakDurationSeconds: TimeInterval {
@@ -324,16 +358,12 @@ final class TaskStore: ObservableObject {
 
     var routineRemainingSeconds: Int {
         guard let activeRoutineUntil else { return 0 }
-        return max(0, Int(ceil(activeRoutineUntil.timeIntervalSince(currentDate))))
+        return Int(ceil(activeRoutineUntil.timeIntervalSince(currentDate)))
     }
 
     var routineTimerText: String? {
         guard isInRoutine, let activeRoutineBlock else { return nil }
-        if isRoutineTimeUp {
-            return "\(activeRoutineBlock.title) done"
-        }
-        let minutes = max(0, Int(ceil(Double(routineRemainingSeconds) / 60.0)))
-        return "\(activeRoutineBlock.title) \(minutes)m"
+        return "\(activeRoutineBlock.title) \(Self.timerText(forRemainingSeconds: routineRemainingSeconds))"
     }
 
     private var elapsedMeetingDurationText: String {
@@ -450,6 +480,86 @@ final class TaskStore: ObservableObject {
 
     func loopsCompleted(in interval: DateInterval) -> Int {
         loopCompletions.filter { interval.contains($0.completedAt) }.count
+    }
+
+    var previousIterationDuration: TimeInterval? {
+        trackedIterationDurations(completedIn: nil).last
+    }
+
+    func previousIterationDuration(on date: Date) -> TimeInterval? {
+        guard let interval = Calendar.current.dateInterval(of: .day, for: date) else { return nil }
+        return trackedIterationDurations(completedIn: interval).last
+    }
+
+    var averageIterationDuration: TimeInterval? {
+        averageTrackedIterationDuration(completedIn: nil)
+    }
+
+    func averageIterationDuration(on date: Date) -> TimeInterval? {
+        guard let interval = Calendar.current.dateInterval(of: .day, for: date) else { return nil }
+        return averageTrackedIterationDuration(completedIn: interval)
+    }
+
+    func averageIterationDuration(in interval: DateInterval) -> TimeInterval? {
+        averageTrackedIterationDuration(completedIn: interval)
+    }
+
+    static func iterationDurations(
+        for completions: [LoopCompletion],
+        completedIn interval: DateInterval? = nil
+    ) -> [TimeInterval] {
+        iterationIntervals(for: completions, completedIn: interval).map(\.duration)
+    }
+
+    static func activeIterationDurations(
+        for completions: [LoopCompletion],
+        activeIntervals: [DateInterval],
+        completedIn interval: DateInterval? = nil
+    ) -> [TimeInterval] {
+        iterationIntervals(for: completions, completedIn: interval).map { iterationInterval in
+            TimeTracking.totalDuration(of: activeIntervals, clippedTo: iterationInterval)
+        }
+    }
+
+    private static func iterationIntervals(
+        for completions: [LoopCompletion],
+        completedIn interval: DateInterval?
+    ) -> [DateInterval] {
+        let orderedCompletions = completions.sorted { left, right in
+            if left.completedAt == right.completedAt {
+                return left.loopNumber < right.loopNumber
+            }
+            return left.completedAt < right.completedAt
+        }
+        return orderedCompletions.enumerated().compactMap { index, completion in
+            guard interval.map({ $0.contains(completion.completedAt) }) ?? true else { return nil }
+            let startedAt: Date
+            if let recordedStart = completion.startedAt {
+                startedAt = recordedStart
+            } else {
+                guard index > 0 else { return nil }
+                let previous = orderedCompletions[index - 1]
+                guard completion.loopNumber == previous.loopNumber + 1 else { return nil }
+                startedAt = previous.completedAt
+            }
+            guard startedAt <= completion.completedAt else { return nil }
+            guard Calendar.current.isDate(startedAt, inSameDayAs: completion.completedAt) else { return nil }
+            return DateInterval(start: startedAt, end: completion.completedAt)
+        }
+    }
+
+    private func trackedIterationDurations(completedIn interval: DateInterval?) -> [TimeInterval] {
+        Self.activeIterationDurations(
+            for: loopCompletions,
+            activeIntervals: activeWorkIntervals(in: nil),
+            completedIn: interval
+        )
+    }
+
+    private func averageTrackedIterationDuration(completedIn interval: DateInterval?) -> TimeInterval? {
+        let durations = trackedIterationDurations(completedIn: interval)
+        guard !durations.isEmpty else { return nil }
+        return durations.reduce(0, +) / Double(durations.count)
     }
 
     func tasksFinished(on date: Date) -> [LoopTask] {
@@ -655,6 +765,156 @@ final class TaskStore: ObservableObject {
         activeDuration(in: interval) + productiveRoutineDuration(in: interval)
     }
 
+    func dayTimeline(on date: Date) -> [DayTimelineEntry] {
+        guard let dayInterval = Calendar.current.dateInterval(of: .day, for: date) else { return [] }
+
+        var entries: [DayTimelineEntry] = []
+        let activeWork = activeWorkIntervals(in: dayInterval)
+        var focusIntervals: [DateInterval] = []
+
+        func appendFocus(taskID: UUID, start: Date, end: Date, sourceID: String) {
+            guard let task = tasks.first(where: { $0.id == taskID }) else { return }
+            guard let clippedFocus = clippedInterval(start: start, end: end, to: dayInterval) else { return }
+
+            for (index, interval) in activeWork.compactMap({ activeInterval in
+                clippedInterval(start: clippedFocus.start, end: clippedFocus.end, to: activeInterval)
+            }).enumerated() {
+                focusIntervals.append(interval)
+                entries.append(DayTimelineEntry(
+                    id: "focus-\(sourceID)-\(index)",
+                    kind: .focusedWork,
+                    title: task.title,
+                    startedAt: interval.start,
+                    endedAt: interval.end
+                ))
+            }
+        }
+
+        for session in taskFocusSessions {
+            appendFocus(
+                taskID: session.taskID,
+                start: session.startedAt,
+                end: session.endedAt,
+                sourceID: session.id.uuidString
+            )
+        }
+        if let taskID = focusSessionTracker.taskID,
+           let startedAt = focusSessionTracker.startedAt {
+            appendFocus(
+                taskID: taskID,
+                start: startedAt,
+                end: max(currentDate, startedAt),
+                sourceID: "current"
+            )
+        }
+
+        for (index, interval) in remainingTimelineIntervals(activeWork, subtracting: focusIntervals).enumerated() {
+            entries.append(DayTimelineEntry(
+                id: "active-\(interval.start.timeIntervalSinceReferenceDate)-\(index)",
+                kind: .activeWork,
+                title: "Active work",
+                startedAt: interval.start,
+                endedAt: interval.end
+            ))
+        }
+
+        let meetings = mergedIntervals(meetingIntervals(in: dayInterval))
+        for (index, interval) in meetings.enumerated() {
+            entries.append(DayTimelineEntry(
+                id: "meeting-\(interval.start.timeIntervalSinceReferenceDate)-\(index)",
+                kind: .meeting,
+                title: "Meeting",
+                startedAt: interval.start,
+                endedAt: interval.end
+            ))
+        }
+
+        let breaks = remainingTimelineIntervals(
+            mergedIntervals(breakIntervals(in: dayInterval)),
+            subtracting: meetings
+        )
+        for (index, interval) in breaks.enumerated() {
+            entries.append(DayTimelineEntry(
+                id: "break-\(interval.start.timeIntervalSinceReferenceDate)-\(index)",
+                kind: .breakTime,
+                title: "Break",
+                startedAt: interval.start,
+                endedAt: interval.end
+            ))
+        }
+
+        for session in routineSessions {
+            guard let routineInterval = clippedInterval(
+                start: session.startedAt,
+                end: session.endedAt,
+                to: dayInterval
+            ) else { continue }
+            for (index, interval) in remainingTimelineIntervals(
+                [routineInterval],
+                subtracting: meetings + breaks
+            ).enumerated() {
+                entries.append(DayTimelineEntry(
+                    id: "routine-\(session.id.uuidString)-\(index)",
+                    kind: .routine,
+                    title: session.title,
+                    startedAt: interval.start,
+                    endedAt: interval.end
+                ))
+            }
+        }
+        if let activeRoutineStartedAt,
+           let activeRoutineBlock,
+           let interval = clippedInterval(
+               start: activeRoutineStartedAt,
+               end: routineEnd(startedAt: activeRoutineStartedAt, requestedEnd: currentDate),
+               to: dayInterval
+           ) {
+            for (index, remainder) in remainingTimelineIntervals(
+                [interval],
+                subtracting: meetings + breaks
+            ).enumerated() {
+                entries.append(DayTimelineEntry(
+                    id: "routine-current-\(index)",
+                    kind: .routine,
+                    title: activeRoutineBlock.title,
+                    startedAt: remainder.start,
+                    endedAt: remainder.end
+                ))
+            }
+        }
+
+        entries.append(contentsOf: loopCompletions.compactMap { completion in
+            guard Calendar.current.isDate(completion.completedAt, inSameDayAs: date) else { return nil }
+            return DayTimelineEntry(
+                id: "loop-\(completion.id.uuidString)",
+                kind: .loopCompleted,
+                title: "Loop \(completion.loopNumber) completed",
+                startedAt: completion.completedAt,
+                endedAt: nil
+            )
+        })
+
+        entries.append(contentsOf: tasks.compactMap { task in
+            guard let finishedAt = task.finishedAt,
+                  Calendar.current.isDate(finishedAt, inSameDayAs: date)
+            else { return nil }
+            return DayTimelineEntry(
+                id: "finished-\(task.id.uuidString)",
+                kind: .taskFinished,
+                title: task.title,
+                startedAt: finishedAt,
+                endedAt: nil
+            )
+        })
+
+        return entries.sorted { left, right in
+            if left.startedAt == right.startedAt {
+                return timelineSortOrder(left.kind) < timelineSortOrder(right.kind)
+            }
+            return left.startedAt < right.startedAt
+        }
+    }
+
     var completedTaskStats: [TaskCompletionStat] {
         completedTaskStats(on: nil)
     }
@@ -725,11 +985,15 @@ final class TaskStore: ObservableObject {
             && latestCompletion.timeIntervalSince(previousCompletion) <= fastLoopCompletionThreshold
     }
 
-    var shouldShowMorningOnboarding: Bool {
-        guard !isOnBreak, !isInMeeting, !isInRoutine else { return false }
-        guard loopsCompletedToday == 0 else { return false }
+    var isMorningRoutineRequired: Bool {
+        guard morningRoutineEnabled else { return false }
         guard let morningOnboardingShownAt else { return true }
         return !Calendar.current.isDate(morningOnboardingShownAt, inSameDayAs: currentDate)
+    }
+
+    var shouldShowMorningOnboarding: Bool {
+        guard !isOnBreak, !isInMeeting, !isInRoutine else { return false }
+        return isMorningRoutineRequired
     }
 
     func suggestion(for task: LoopTask) -> LoopTaskSuggestion? {
@@ -763,9 +1027,31 @@ final class TaskStore: ObservableObject {
         dismissedFastLoopSuggestionAt = Date()
     }
 
+    func prepareMorningRoutine() {
+        guard isMorningRoutineRequired else { return }
+        clearFocusedTask()
+        guard morningRoutineStartedAt.map({
+            Calendar.current.isDate($0, inSameDayAs: currentDate)
+        }) != true else { return }
+
+        let now = Date()
+        morningRoutineStartedAt = now
+        loopNumber += 1
+        currentIterationStartedAt = now
+        clearPriorityDeferrals()
+        clearCurrentLoopCompletionState()
+    }
+
     func markMorningOnboardingShown() {
         recordAction(.completeMorningPlan)
         morningOnboardingShownAt = Date()
+        ensureFocusedTask()
+    }
+
+    func setMorningRoutineEnabled(_ isEnabled: Bool) {
+        guard morningRoutineEnabled != isEnabled else { return }
+        morningRoutineEnabled = isEnabled
+        ensureFocusedTask()
     }
 
     func refreshCurrentDate() {
@@ -855,18 +1141,26 @@ final class TaskStore: ObservableObject {
 
     func startRoutineBlock(_ routine: RoutineBlock) {
         guard isInteractiveTrackingEnabled else { return }
-        guard !isOnBreak, !isInMeeting else { return }
+        guard !isFocusTimeActive || focusTimeSchedule.includesRoutines else {
+            notice = "Routines are paused during focus time."
+            return
+        }
+        guard !isInMeeting else { return }
+        guard let storedRoutine = routineBlocks.first(where: { $0.id == routine.id && $0.isEnabled }) else { return }
+        let now = Date()
+        if isOnBreak {
+            recordAction(.endBreak)
+            endBreakForSleep(at: now)
+        }
         if isInRoutine {
             endRoutineBlock(markComplete: false)
         }
-        guard let storedRoutine = routineBlocks.first(where: { $0.id == routine.id && $0.isEnabled }) else { return }
         recordAction(.startRoutine)
-        let now = Date()
         activeRoutineBlockID = storedRoutine.id
         activeRoutineStartedAt = now
         activeRoutineUntil = now.addingTimeInterval(TimeInterval(normalizedRoutineDurationMinutes(storedRoutine.durationMinutes) * 60))
         activeRoutineScheduledAt = activeScheduledDate(for: storedRoutine, at: now)
-        clearFocusedTask(at: now)
+        closeTaskFocusSession(at: now)
         lastAutoOpenedFocusedTaskID = nil
         currentDate = now
         postFocusStarted(.routine(storedRoutine.id))
@@ -884,7 +1178,7 @@ final class TaskStore: ObservableObject {
 
         recordAction(markComplete ? .completeRoutine : .skipRoutine)
         let routine = routineBlocks.first { $0.id == activeRoutineBlockID }
-        let routineEndedAt = boundedRoutineEnd(startedAt: activeRoutineStartedAt, requestedEnd: now)
+        let routineEndedAt = routineEnd(startedAt: activeRoutineStartedAt, requestedEnd: now)
         pauseIterationTimers(by: routineEndedAt.timeIntervalSince(activeRoutineStartedAt))
         if isValidRoutineSession(startedAt: activeRoutineStartedAt, endedAt: routineEndedAt) {
             routineSessions.append(RoutineSession(
@@ -944,8 +1238,10 @@ final class TaskStore: ObservableObject {
 
     func snoozeRoutine(_ routine: RoutineBlock, minutes: Int = 30) {
         guard minutes > 0 else { return }
+        if activeRoutineBlockID == routine.id {
+            endRoutineBlock(markComplete: false)
+        }
         guard let index = routineBlocks.firstIndex(where: { $0.id == routine.id && $0.isEnabled }) else { return }
-        guard activeRoutineBlockID != routine.id else { return }
 
         recordAction(.snoozeRoutine)
         let now = Date()
@@ -1001,6 +1297,7 @@ final class TaskStore: ObservableObject {
         if updatedTask.isBacklog {
             updatedTask.doneThisLoop = false
             updatedTask.lastCompletedLoop = nil
+            updatedTask.forcedDueLoop = nil
             updatedTask.snoozedUntil = nil
             updatedTask.lastQuickCompletionAt = nil
             updatedTask.iterationTimerStartedAt = nil
@@ -1016,6 +1313,7 @@ final class TaskStore: ObservableObject {
             updatedTask.finishedAt = updatedTask.finishedAt ?? Date()
             updatedTask.snoozedUntil = nil
             updatedTask.lastQuickCompletionAt = nil
+            updatedTask.forcedDueLoop = nil
             updatedTask.iterationTimerStartedAt = nil
             updatedTask.iterationTimerStartedLoop = nil
         } else if previousTask.finished {
@@ -1040,6 +1338,7 @@ final class TaskStore: ObservableObject {
 
         if updatedTask.doneThisLoop {
             updatedTask.lastCompletedLoop = loopNumber
+            updatedTask.forcedDueLoop = nil
             updatedTask.iterationTimerStartedAt = nil
             updatedTask.iterationTimerStartedLoop = nil
             if !previousTask.doneThisLoop {
@@ -1092,6 +1391,7 @@ final class TaskStore: ObservableObject {
         tasks[index].doneThisLoop.toggle()
         if tasks[index].doneThisLoop {
             tasks[index].lastCompletedLoop = loopNumber
+            tasks[index].forcedDueLoop = nil
             tasks[index].snoozedUntil = nil
             tasks[index].iterationTimerStartedAt = nil
             tasks[index].iterationTimerStartedLoop = nil
@@ -1133,6 +1433,7 @@ final class TaskStore: ObservableObject {
         tasks[index].isBacklog = false
         tasks[index].doneThisLoop = true
         tasks[index].lastCompletedLoop = loopNumber
+        tasks[index].forcedDueLoop = nil
         tasks[index].createdLoop = tasks[index].createdLoop ?? loopNumber
         tasks[index].finishedLoop = loopNumber
         tasks[index].finishedAt = Date()
@@ -1153,6 +1454,7 @@ final class TaskStore: ObservableObject {
         tasks[index].finished = false
         tasks[index].doneThisLoop = false
         tasks[index].lastCompletedLoop = nil
+        tasks[index].forcedDueLoop = nil
         tasks[index].finishedLoop = nil
         tasks[index].finishedAt = nil
         tasks[index].snoozedUntil = nil
@@ -1177,6 +1479,7 @@ final class TaskStore: ObservableObject {
         tasks[index].isBacklog = false
         tasks[index].doneThisLoop = false
         tasks[index].lastCompletedLoop = nil
+        tasks[index].forcedDueLoop = nil
         tasks[index].snoozedUntil = nil
         tasks[index].scheduledFor = nil
         tasks[index].lastQuickCompletionAt = nil
@@ -1195,6 +1498,7 @@ final class TaskStore: ObservableObject {
         tasks[index].isBacklog = true
         tasks[index].doneThisLoop = false
         tasks[index].lastCompletedLoop = nil
+        tasks[index].forcedDueLoop = nil
         tasks[index].snoozedUntil = nil
         tasks[index].scheduledFor = nil
         tasks[index].lastQuickCompletionAt = nil
@@ -1224,6 +1528,10 @@ final class TaskStore: ObservableObject {
 
     func focus(_ task: LoopTask) {
         guard isInteractiveTrackingEnabled, !isOnBreak, !isInMeeting, !isInRoutine else { return }
+        guard !isMorningRoutineRequired else {
+            notice = "Complete the morning routine before focusing a task."
+            return
+        }
         guard !task.isBacklog else { return }
         guard currentLoopTasks.contains(where: { $0.id == task.id && !$0.doneThisLoop }) else { return }
         recordAction(.focusTask)
@@ -1239,6 +1547,7 @@ final class TaskStore: ObservableObject {
         recordAction(.snoozeTask)
         let wasDoneThisLoop = tasks[index].doneThisLoop
         tasks[index].snoozedUntil = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        tasks[index].forcedDueLoop = nil
         tasks[index].snoozeCount += 1
         tasks[index].lastQuickCompletionAt = nil
         tasks[index].iterationTimerStartedAt = nil
@@ -1263,9 +1572,16 @@ final class TaskStore: ObservableObject {
     }
 
     func clearSchedule(for task: LoopTask) {
-        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return }
+        guard let index = tasks.firstIndex(where: { $0.id == task.id && !$0.finished && !$0.isBacklog }) else { return }
         recordAction(.clearSchedule)
         tasks[index].scheduledFor = nil
+        tasks[index].snoozedUntil = nil
+        tasks[index].doneThisLoop = false
+        tasks[index].forcedDueLoop = loopNumber
+        tasks[index].priorityDeferredLoop = nil
+        tasks[index].lastQuickCompletionAt = nil
+        tasks[index].iterationTimerStartedAt = nil
+        tasks[index].iterationTimerStartedLoop = nil
         tasks[index].updatedAt = Date()
         ensureFocusedTask()
     }
@@ -1277,6 +1593,7 @@ final class TaskStore: ObservableObject {
         recordAction(.scheduleForNextWorkingDay)
         let now = Date()
         tasks[index].scheduledFor = nextWorkingDay(atHour: 7, from: now)
+        tasks[index].forcedDueLoop = nil
         tasks[index].snoozedUntil = nil
         tasks[index].lastQuickCompletionAt = nil
         tasks[index].iterationTimerStartedAt = nil
@@ -1318,6 +1635,53 @@ final class TaskStore: ObservableObject {
         guard defaultIterationTimerMinutes != clampedMinutes else { return }
         recordAction(.setDefaultIterationTimer)
         defaultIterationTimerMinutes = clampedMinutes
+    }
+
+    func setFocusTimeEnabled(_ isEnabled: Bool) {
+        guard focusTimeSchedule.isEnabled != isEnabled else { return }
+        focusTimeSuppressedUntil = nil
+        focusTimeSchedule.isEnabled = isEnabled
+        enforceFocusTimeIfNeeded()
+    }
+
+    func setFocusTimeStart(_ startTime: DailyScheduleTime) {
+        let normalizedTime = DailyScheduleTime(hour: startTime.hour, minute: startTime.minute)
+        guard focusTimeSchedule.startTime != normalizedTime else { return }
+        focusTimeSuppressedUntil = nil
+        focusTimeSchedule.startTime = normalizedTime
+        enforceFocusTimeIfNeeded()
+    }
+
+    func setFocusTimeEnd(_ endTime: DailyScheduleTime) {
+        let normalizedTime = DailyScheduleTime(hour: endTime.hour, minute: endTime.minute)
+        guard focusTimeSchedule.endTime != normalizedTime else { return }
+        focusTimeSuppressedUntil = nil
+        focusTimeSchedule.endTime = normalizedTime
+        enforceFocusTimeIfNeeded()
+    }
+
+    func setFocusTimeIncludesRoutines(_ includesRoutines: Bool) {
+        guard focusTimeSchedule.includesRoutines != includesRoutines else { return }
+        focusTimeSchedule.includesRoutines = includesRoutines
+        enforceFocusTimeIfNeeded()
+    }
+
+    func setFocusTimeAllowsBreaks(_ allowsBreaks: Bool) {
+        guard focusTimeSchedule.allowsBreaks != allowsBreaks else { return }
+        focusTimeSchedule.allowsBreaks = allowsBreaks
+    }
+
+    func setFocusTimeConfirmsMeetings(_ confirmsMeetings: Bool) {
+        guard focusTimeSchedule.confirmsMeetings != confirmsMeetings else { return }
+        focusTimeSchedule.confirmsMeetings = confirmsMeetings
+    }
+
+    func endFocusTimeForToday() {
+        guard isFocusTimeActive else { return }
+        guard let blockEnd = focusTimeSchedule.endOfActiveBlock(containing: currentDate) else { return }
+        recordAction(.endFocusTimeForToday)
+        focusTimeSuppressedUntil = blockEnd
+        notice = "Focus time ended for today."
     }
 
     func extendIterationTimer(for task: LoopTask, by minutes: Int) {
@@ -1376,8 +1740,14 @@ final class TaskStore: ObservableObject {
 
     private func advanceLoop(openNextFocusedApp: Bool, resetFocusToFirstTask: Bool) {
         recordAction(.advanceLoop)
-        loopCompletions.append(LoopCompletion(loopNumber: loopNumber))
+        let completedAt = Date()
+        loopCompletions.append(LoopCompletion(
+            loopNumber: loopNumber,
+            startedAt: min(currentIterationStartedAt, completedAt),
+            completedAt: completedAt
+        ))
         loopNumber += 1
+        currentIterationStartedAt = completedAt
         clearPriorityDeferrals()
         for index in tasks.indices where !tasks[index].isBacklog && !tasks[index].finished && tasks[index].doneThisLoop {
             tasks[index].doneThisLoop = false
@@ -1412,6 +1782,11 @@ final class TaskStore: ObservableObject {
 
     func resetCurrentLoop() {
         recordAction(.resetLoop)
+        clearCurrentLoopCompletionState()
+        ensureFocusedTask()
+    }
+
+    private func clearCurrentLoopCompletionState() {
         for index in tasks.indices where !tasks[index].isBacklog && !tasks[index].finished {
             if tasks[index].lastCompletedLoop == loopNumber {
                 tasks[index].lastCompletedLoop = nil
@@ -1422,12 +1797,14 @@ final class TaskStore: ObservableObject {
             tasks[index].iterationTimerStartedLoop = nil
             tasks[index].updatedAt = Date()
         }
-        ensureFocusedTask()
     }
 
     func isDue(_ task: LoopTask) -> Bool {
         guard !task.isBacklog else { return false }
         guard !task.finished else { return false }
+        if task.forcedDueLoop == loopNumber {
+            return true
+        }
         guard !isSnoozed(task) else { return false }
         if let createdLoop = task.createdLoop, createdLoop > loopNumber {
             return false
@@ -1445,6 +1822,7 @@ final class TaskStore: ObservableObject {
     }
 
     func isRoutineDue(_ routine: RoutineBlock) -> Bool {
+        guard !isFocusTimeActive || focusTimeSchedule.includesRoutines else { return false }
         guard routine.isEnabled else { return false }
         guard activeRoutineBlockID != routine.id else { return false }
         guard !isRoutineSnoozed(routine) else { return false }
@@ -1544,9 +1922,18 @@ final class TaskStore: ObservableObject {
             endBreak()
             return
         }
-        guard !isInMeeting, !isInRoutine else { return }
+        guard !isFocusTimeActive || focusTimeSchedule.allowsBreaks else {
+            notice = "Breaks are disabled during focus time."
+            return
+        }
+        guard !isInMeeting else { return }
 
         let now = Date()
+        if isInRoutine {
+            recordAction(.skipRoutine)
+            endRoutineForInterruption(at: now)
+            postFocusModeEnded(.routine)
+        }
         recordAction(.startBreak)
         breakShouldFocusPriorityAfterBreak = false
         closeTaskFocusSession(at: now)
@@ -1586,11 +1973,11 @@ final class TaskStore: ObservableObject {
                 postFocusModeEnded(.break)
             }
             if isInRoutine {
-                endRoutineForSleep(at: now)
+                endRoutineForInterruption(at: now)
                 postFocusModeEnded(.routine)
             }
             recordAction(.startMeeting)
-            clearFocusedTask(at: now)
+            closeTaskFocusSession(at: now)
             meetingStartedAt = now
             lastAutoOpenedFocusedTaskID = nil
             return
@@ -1641,7 +2028,7 @@ final class TaskStore: ObservableObject {
         endActiveSession(at: now)
         endBreakForSleep(at: now)
         endMeetingForSleep(at: now)
-        endRoutineForSleep(at: now)
+        endRoutineForInterruption(at: now)
         if sleepStartedAt == nil {
             sleepStartedAt = now
         }
@@ -1731,7 +2118,7 @@ final class TaskStore: ObservableObject {
         self.meetingStartedAt = nil
     }
 
-    private func endRoutineForSleep(at now: Date) {
+    private func endRoutineForInterruption(at now: Date) {
         guard
             let activeRoutineBlockID,
             let activeRoutineStartedAt
@@ -1739,7 +2126,7 @@ final class TaskStore: ObservableObject {
             return
         }
 
-        let endedAt = boundedRoutineEnd(startedAt: activeRoutineStartedAt, requestedEnd: now)
+        let endedAt = routineEnd(startedAt: activeRoutineStartedAt, requestedEnd: now)
         let routine = routineBlocks.first { $0.id == activeRoutineBlockID }
         pauseIterationTimers(by: endedAt.timeIntervalSince(activeRoutineStartedAt))
         if isValidRoutineSession(startedAt: activeRoutineStartedAt, endedAt: endedAt) {
@@ -2092,7 +2479,7 @@ final class TaskStore: ObservableObject {
     private func refreshDueItems() {
         guard isInteractiveTrackingEnabled else { return }
         guard !isOnBreak, !isInMeeting, !isInRoutine else { return }
-        guard focusedTaskID == nil, currentFocusTaskID != nil else { return }
+        guard focusedTaskID != currentFocusTaskID else { return }
         ensureFocusedTask()
     }
 
@@ -2114,6 +2501,7 @@ final class TaskStore: ObservableObject {
         }
         tasks[index].doneThisLoop = true
         tasks[index].lastCompletedLoop = loopNumber
+        tasks[index].forcedDueLoop = nil
         tasks[index].snoozedUntil = nil
         tasks[index].iterationTimerStartedAt = nil
         tasks[index].iterationTimerStartedLoop = nil
@@ -2131,6 +2519,7 @@ final class TaskStore: ObservableObject {
         guard tasks.indices.contains(index), tasks[index].isPriority, !tasks[index].finished else { return }
         tasks[index].doneThisLoop = false
         tasks[index].lastCompletedLoop = nil
+        tasks[index].forcedDueLoop = nil
         tasks[index].lastQuickCompletionAt = nil
         tasks[index].snoozedUntil = nil
         tasks[index].iterationTimerStartedAt = nil
@@ -2276,12 +2665,19 @@ final class TaskStore: ObservableObject {
     private func tickCurrentDate() {
         let now = Date()
         detectSuspensionIfNeeded(at: now, awakeUptime: ProcessInfo.processInfo.systemUptime)
+        enforceFocusTimeIfNeeded()
         refreshDueItems()
         if isInteractiveTrackingEnabled,
            trackingHeartbeatAt.map({ now.timeIntervalSince($0) >= trackingHeartbeatInterval }) ?? true {
             trackingHeartbeatAt = now
             save()
         }
+    }
+
+    private func enforceFocusTimeIfNeeded() {
+        guard isFocusTimeActive, !focusTimeSchedule.includesRoutines, isInRoutine else { return }
+        endRoutineBlock(markComplete: false)
+        notice = "Routine stopped because focus time started."
     }
 
     private func detectSuspensionIfNeeded(at now: Date, awakeUptime: TimeInterval) {
@@ -2311,7 +2707,7 @@ final class TaskStore: ObservableObject {
         endActiveSession(at: lastAwakeAt)
         endBreakForSleep(at: lastAwakeAt)
         endMeetingForSleep(at: lastAwakeAt)
-        endRoutineForSleep(at: lastAwakeAt)
+        endRoutineForInterruption(at: lastAwakeAt)
         isInteractiveTrackingEnabled = false
         if sleepStartedAt == nil {
             sleepStartedAt = lastAwakeAt
@@ -2336,7 +2732,7 @@ final class TaskStore: ObservableObject {
 
     private func activeRoutineDuration(in interval: DateInterval?) -> TimeInterval {
         guard let activeRoutineStartedAt else { return 0 }
-        let end = boundedRoutineEnd(startedAt: activeRoutineStartedAt, requestedEnd: currentDate)
+        let end = routineEnd(startedAt: activeRoutineStartedAt, requestedEnd: currentDate)
         guard let interval else { return max(0, end.timeIntervalSince(activeRoutineStartedAt)) }
         return overlapDuration(start: activeRoutineStartedAt, end: end, with: interval)
     }
@@ -2362,7 +2758,7 @@ final class TaskStore: ObservableObject {
             predicate(session) ? clippedInterval(start: session.startedAt, end: session.endedAt, to: interval) : nil
         }
         if let activeRoutineStartedAt {
-            let activeRoutineEnd = boundedRoutineEnd(
+            let activeRoutineEnd = routineEnd(
                 startedAt: activeRoutineStartedAt,
                 requestedEnd: currentDate
             )
@@ -2476,7 +2872,7 @@ final class TaskStore: ObservableObject {
             intervals.append(contentsOf: [clippedInterval(start: meetingStartedAt, end: currentDate, to: interval)].compactMap { $0 })
         }
         if let activeRoutineStartedAt {
-            let activeRoutineEnd = boundedRoutineEnd(
+            let activeRoutineEnd = routineEnd(
                 startedAt: activeRoutineStartedAt,
                 requestedEnd: currentDate
             )
@@ -2503,6 +2899,26 @@ final class TaskStore: ObservableObject {
 
     private func remainingIntervals(of interval: DateInterval, subtracting blockedIntervals: [DateInterval]) -> [DateInterval] {
         TimeTracking.subtracting(blockedIntervals, from: [interval])
+    }
+
+    private func remainingTimelineIntervals(
+        _ intervals: [DateInterval],
+        subtracting blockedIntervals: [DateInterval]
+    ) -> [DateInterval] {
+        TimeTracking.subtracting(blockedIntervals, from: intervals)
+            .filter { $0.duration >= 1 }
+    }
+
+    private func timelineSortOrder(_ kind: DayTimelineEntryKind) -> Int {
+        switch kind {
+        case .focusedWork: 0
+        case .activeWork: 1
+        case .routine: 2
+        case .meeting: 3
+        case .breakTime: 4
+        case .taskFinished: 5
+        case .loopCompleted: 6
+        }
     }
 
     private func overlapDuration(start: Date, end: Date, with interval: DateInterval) -> TimeInterval {
@@ -2619,7 +3035,7 @@ final class TaskStore: ObservableObject {
         if let activeRoutineBlockID,
            let activeRoutineStartedAt,
            activeRoutineStartedAt < recoveryEnd {
-            let recoveredRoutineEnd = boundedRoutineEnd(
+            let recoveredRoutineEnd = boundedRecoveredRoutineEnd(
                 startedAt: activeRoutineStartedAt,
                 requestedEnd: recoveryEnd
             )
@@ -2703,15 +3119,6 @@ final class TaskStore: ObservableObject {
         }
             .flatMap { metadata, routineSessions -> [RoutineSession] in
                 return coalescedOverlappingIntervals(routineSessions.map { ($0.startedAt, $0.endedAt) })
-                    .map { interval in
-                        (
-                            start: interval.start,
-                            end: min(
-                                interval.end,
-                                interval.start.addingTimeInterval(maximumRecoveredRoutineDuration)
-                            )
-                        )
-                    }
                     .filter { isValidRoutineSession(startedAt: $0.start, endedAt: $0.end) }
                     .map {
                         RoutineSession(
@@ -2755,15 +3162,16 @@ final class TaskStore: ObservableObject {
     }
 
     private func isValidRoutineSession(startedAt: Date, endedAt: Date) -> Bool {
-        guard endedAt > startedAt else { return false }
-        return endedAt.timeIntervalSince(startedAt) <= maximumRecoveredRoutineDuration
+        endedAt > startedAt
     }
 
-    private func boundedRoutineEnd(startedAt: Date, requestedEnd: Date) -> Date {
+    private func routineEnd(startedAt: Date, requestedEnd: Date) -> Date {
+        max(requestedEnd, startedAt)
+    }
+
+    private func boundedRecoveredRoutineEnd(startedAt: Date, requestedEnd: Date) -> Date {
         let hardLimit = startedAt.addingTimeInterval(maximumRecoveredRoutineDuration)
-        let configuredLimit = min(activeRoutineUntil ?? hardLimit, hardLimit)
-        let trustedLimit = max(startedAt, configuredLimit)
-        return min(max(requestedEnd, startedAt), trustedLimit)
+        return min(routineEnd(startedAt: startedAt, requestedEnd: requestedEnd), hardLimit)
     }
 
     private func save() {
@@ -2790,6 +3198,7 @@ final class TaskStore: ObservableObject {
             tasks: tasks,
             loopNumber: loopNumber,
             loopCompletions: loopCompletions,
+            currentIterationStartedAt: currentIterationStartedAt,
             breakSessions: breakSessions,
             meetingSessions: meetingSessions,
             routineBlocks: routineBlocks,
@@ -2801,6 +3210,8 @@ final class TaskStore: ObservableObject {
             autoOpenFocusedTaskApp: autoOpenFocusedTaskApp,
             dismissedFastLoopSuggestionAt: dismissedFastLoopSuggestionAt,
             morningOnboardingShownAt: morningOnboardingShownAt,
+            morningRoutineStartedAt: morningRoutineStartedAt,
+            morningRoutineEnabled: morningRoutineEnabled,
             breakStartedAt: breakStartedAt,
             breakUntil: breakUntil,
             breakShouldFocusPriorityAfterBreak: breakShouldFocusPriorityAfterBreak,
@@ -2815,18 +3226,20 @@ final class TaskStore: ObservableObject {
             breakDurationMinutes: breakDurationMinutes,
             defaultIterationTimerMinutes: defaultIterationTimerMinutes,
             newTasksStartInCurrentIteration: newTasksStartInCurrentIteration,
+            focusTimeSchedule: focusTimeSchedule,
+            focusTimeSuppressedUntil: focusTimeSuppressedUntil,
             shortcut: shortcut.normalized,
             doneShortcut: doneShortcut.normalized,
             quickAddShortcut: quickAddShortcut.normalized,
             breakShortcut: breakShortcut.normalized
         )
         guard let data = try? JSONEncoder().encode(snapshot) else { return }
-        UserDefaults.standard.set(data, forKey: defaultsKey)
+        defaults.set(data, forKey: defaultsKey)
     }
 
     private func load() {
         guard
-            let data = UserDefaults.standard.data(forKey: defaultsKey),
+            let data = defaults.data(forKey: defaultsKey),
             let snapshot = try? JSONDecoder().decode(StoreSnapshot.self, from: data)
         else {
             return
@@ -2844,6 +3257,9 @@ final class TaskStore: ObservableObject {
 
         loopNumber = max(1, snapshot.loopNumber)
         loopCompletions = snapshot.loopCompletions
+        currentIterationStartedAt = snapshot.currentIterationStartedAt
+            ?? snapshot.loopCompletions.max(by: { $0.completedAt < $1.completedAt })?.completedAt
+            ?? Date()
         breakSessions = snapshot.breakSessions
         meetingSessions = snapshot.meetingSessions
         routineBlocks = snapshot.routineBlocks
@@ -2856,6 +3272,8 @@ final class TaskStore: ObservableObject {
         openLoopAtLogin = LoginLaunchAgent.isEnabled
         dismissedFastLoopSuggestionAt = snapshot.dismissedFastLoopSuggestionAt
         morningOnboardingShownAt = snapshot.morningOnboardingShownAt
+        morningRoutineStartedAt = snapshot.morningRoutineStartedAt
+        morningRoutineEnabled = snapshot.morningRoutineEnabled
         breakStartedAt = snapshot.breakStartedAt
         breakUntil = snapshot.breakUntil
         breakShouldFocusPriorityAfterBreak = snapshot.breakShouldFocusPriorityAfterBreak
@@ -2870,6 +3288,8 @@ final class TaskStore: ObservableObject {
         breakDurationMinutes = min(max(snapshot.breakDurationMinutes, 1), 120)
         defaultIterationTimerMinutes = min(max(snapshot.defaultIterationTimerMinutes, 0), 240)
         newTasksStartInCurrentIteration = snapshot.newTasksStartInCurrentIteration
+        focusTimeSchedule = snapshot.focusTimeSchedule
+        focusTimeSuppressedUntil = snapshot.focusTimeSuppressedUntil
         doneShortcut = snapshot.doneShortcut.normalized
         quickAddShortcut = snapshot.quickAddShortcut.normalized
         breakShortcut = snapshot.breakShortcut.normalized
@@ -2991,6 +3411,7 @@ private enum LoopAction: String, CaseIterable {
     case setOpenLoopAtLogin
     case setBreakDuration
     case setDefaultIterationTimer
+    case endFocusTimeForToday
     case dismissSuggestion
     case dismissFastLoopSuggestion
     case completeMorningPlan
@@ -3036,6 +3457,7 @@ private enum LoopAction: String, CaseIterable {
         case .setOpenLoopAtLogin: "Toggle login launch"
         case .setBreakDuration: "Change break duration"
         case .setDefaultIterationTimer: "Change default timer"
+        case .endFocusTimeForToday: "End focus time for today"
         case .dismissSuggestion: "Dismiss suggestion"
         case .dismissFastLoopSuggestion: "Dismiss fast-loop suggestion"
         case .completeMorningPlan: "Complete morning plan"
@@ -3062,6 +3484,7 @@ private enum LoopAction: String, CaseIterable {
         case .startBreak, .endBreak, .setBreakDuration: "cup.and.saucer"
         case .startMeeting, .endMeeting: "video"
         case .startRoutine, .skipRoutine: "play.circle"
+        case .endFocusTimeForToday: "stop.circle"
         case .setAutoOpenFocusedTaskApp: "app.badge"
         case .setOpenLoopAtLogin: "power"
         case .dismissSuggestion, .dismissFastLoopSuggestion: "xmark.circle"
@@ -3080,7 +3503,7 @@ private enum LoopAction: String, CaseIterable {
              .reopenRoutine, .snoozeRoutine:
             return .routines
         case .advanceLoop, .resetLoop, .startBreak, .endBreak, .startMeeting, .endMeeting,
-             .dismissSuggestion, .dismissFastLoopSuggestion, .completeMorningPlan:
+             .endFocusTimeForToday, .dismissSuggestion, .dismissFastLoopSuggestion, .completeMorningPlan:
             return .flow
         case .setAutoOpenFocusedTaskApp, .setOpenLoopAtLogin, .setBreakDuration, .setDefaultIterationTimer:
             return .settings
@@ -3092,6 +3515,7 @@ private struct StoreSnapshot: Codable {
     var tasks: [LoopTask]
     var loopNumber: Int
     var loopCompletions: [LoopCompletion]
+    var currentIterationStartedAt: Date?
     var breakSessions: [BreakSession]
     var meetingSessions: [MeetingSession]
     var routineBlocks: [RoutineBlock]
@@ -3103,6 +3527,8 @@ private struct StoreSnapshot: Codable {
     var autoOpenFocusedTaskApp: Bool
     var dismissedFastLoopSuggestionAt: Date?
     var morningOnboardingShownAt: Date?
+    var morningRoutineStartedAt: Date?
+    var morningRoutineEnabled: Bool
     var breakStartedAt: Date?
     var breakUntil: Date?
     var breakShouldFocusPriorityAfterBreak: Bool
@@ -3117,6 +3543,8 @@ private struct StoreSnapshot: Codable {
     var breakDurationMinutes: Int
     var defaultIterationTimerMinutes: Int
     var newTasksStartInCurrentIteration: Bool
+    var focusTimeSchedule: FocusTimeSchedule
+    var focusTimeSuppressedUntil: Date?
     var shortcut: KeyboardShortcutSetting
     var doneShortcut: KeyboardShortcutSetting
     var quickAddShortcut: KeyboardShortcutSetting
@@ -3126,6 +3554,7 @@ private struct StoreSnapshot: Codable {
         case tasks
         case loopNumber
         case loopCompletions
+        case currentIterationStartedAt
         case breakSessions
         case meetingSessions
         case routineBlocks
@@ -3137,6 +3566,8 @@ private struct StoreSnapshot: Codable {
         case autoOpenFocusedTaskApp
         case dismissedFastLoopSuggestionAt
         case morningOnboardingShownAt
+        case morningRoutineStartedAt
+        case morningRoutineEnabled
         case breakStartedAt
         case breakUntil
         case breakShouldFocusPriorityAfterBreak
@@ -3151,6 +3582,8 @@ private struct StoreSnapshot: Codable {
         case breakDurationMinutes
         case defaultIterationTimerMinutes
         case newTasksStartInCurrentIteration
+        case focusTimeSchedule
+        case focusTimeSuppressedUntil
         case shortcut
         case doneShortcut
         case quickAddShortcut
@@ -3161,6 +3594,7 @@ private struct StoreSnapshot: Codable {
         tasks: [LoopTask],
         loopNumber: Int,
         loopCompletions: [LoopCompletion],
+        currentIterationStartedAt: Date?,
         breakSessions: [BreakSession],
         meetingSessions: [MeetingSession],
         routineBlocks: [RoutineBlock],
@@ -3172,6 +3606,8 @@ private struct StoreSnapshot: Codable {
         autoOpenFocusedTaskApp: Bool,
         dismissedFastLoopSuggestionAt: Date?,
         morningOnboardingShownAt: Date?,
+        morningRoutineStartedAt: Date?,
+        morningRoutineEnabled: Bool,
         breakStartedAt: Date?,
         breakUntil: Date?,
         breakShouldFocusPriorityAfterBreak: Bool,
@@ -3186,6 +3622,8 @@ private struct StoreSnapshot: Codable {
         breakDurationMinutes: Int,
         defaultIterationTimerMinutes: Int,
         newTasksStartInCurrentIteration: Bool,
+        focusTimeSchedule: FocusTimeSchedule,
+        focusTimeSuppressedUntil: Date?,
         shortcut: KeyboardShortcutSetting,
         doneShortcut: KeyboardShortcutSetting,
         quickAddShortcut: KeyboardShortcutSetting,
@@ -3194,6 +3632,7 @@ private struct StoreSnapshot: Codable {
         self.tasks = tasks
         self.loopNumber = loopNumber
         self.loopCompletions = loopCompletions
+        self.currentIterationStartedAt = currentIterationStartedAt
         self.breakSessions = breakSessions
         self.meetingSessions = meetingSessions
         self.routineBlocks = routineBlocks
@@ -3205,6 +3644,8 @@ private struct StoreSnapshot: Codable {
         self.autoOpenFocusedTaskApp = autoOpenFocusedTaskApp
         self.dismissedFastLoopSuggestionAt = dismissedFastLoopSuggestionAt
         self.morningOnboardingShownAt = morningOnboardingShownAt
+        self.morningRoutineStartedAt = morningRoutineStartedAt
+        self.morningRoutineEnabled = morningRoutineEnabled
         self.breakStartedAt = breakStartedAt
         self.breakUntil = breakUntil
         self.breakShouldFocusPriorityAfterBreak = breakShouldFocusPriorityAfterBreak
@@ -3219,6 +3660,8 @@ private struct StoreSnapshot: Codable {
         self.breakDurationMinutes = breakDurationMinutes
         self.defaultIterationTimerMinutes = defaultIterationTimerMinutes
         self.newTasksStartInCurrentIteration = newTasksStartInCurrentIteration
+        self.focusTimeSchedule = focusTimeSchedule
+        self.focusTimeSuppressedUntil = focusTimeSuppressedUntil
         self.shortcut = shortcut
         self.doneShortcut = doneShortcut
         self.quickAddShortcut = quickAddShortcut
@@ -3230,6 +3673,7 @@ private struct StoreSnapshot: Codable {
         tasks = container.decodeLossyArray([LoopTask].self, forKey: .tasks)
         loopNumber = try container.decodeIfPresent(Int.self, forKey: .loopNumber) ?? 1
         loopCompletions = container.decodeLossyArray([LoopCompletion].self, forKey: .loopCompletions)
+        currentIterationStartedAt = try container.decodeIfPresent(Date.self, forKey: .currentIterationStartedAt)
         breakSessions = container.decodeLossyArray([BreakSession].self, forKey: .breakSessions)
         meetingSessions = container.decodeLossyArray([MeetingSession].self, forKey: .meetingSessions)
         routineBlocks = container.decodeLossyArray([RoutineBlock].self, forKey: .routineBlocks)
@@ -3241,6 +3685,8 @@ private struct StoreSnapshot: Codable {
         autoOpenFocusedTaskApp = try container.decodeIfPresent(Bool.self, forKey: .autoOpenFocusedTaskApp) ?? true
         dismissedFastLoopSuggestionAt = try container.decodeIfPresent(Date.self, forKey: .dismissedFastLoopSuggestionAt)
         morningOnboardingShownAt = try container.decodeIfPresent(Date.self, forKey: .morningOnboardingShownAt)
+        morningRoutineStartedAt = try container.decodeIfPresent(Date.self, forKey: .morningRoutineStartedAt)
+        morningRoutineEnabled = try container.decodeIfPresent(Bool.self, forKey: .morningRoutineEnabled) ?? true
         breakStartedAt = try container.decodeIfPresent(Date.self, forKey: .breakStartedAt)
         breakUntil = try container.decodeIfPresent(Date.self, forKey: .breakUntil)
         breakShouldFocusPriorityAfterBreak = try container.decodeIfPresent(Bool.self, forKey: .breakShouldFocusPriorityAfterBreak) ?? false
@@ -3255,6 +3701,8 @@ private struct StoreSnapshot: Codable {
         breakDurationMinutes = try container.decodeIfPresent(Int.self, forKey: .breakDurationMinutes) ?? 5
         defaultIterationTimerMinutes = try container.decodeIfPresent(Int.self, forKey: .defaultIterationTimerMinutes) ?? 2
         newTasksStartInCurrentIteration = try container.decodeIfPresent(Bool.self, forKey: .newTasksStartInCurrentIteration) ?? true
+        focusTimeSchedule = try container.decodeIfPresent(FocusTimeSchedule.self, forKey: .focusTimeSchedule) ?? FocusTimeSchedule()
+        focusTimeSuppressedUntil = try container.decodeIfPresent(Date.self, forKey: .focusTimeSuppressedUntil)
         shortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .shortcut) ?? .defaultShortcut
         doneShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .doneShortcut) ?? .defaultDoneShortcut
         quickAddShortcut = try container.decodeIfPresent(KeyboardShortcutSetting.self, forKey: .quickAddShortcut) ?? .defaultQuickAddShortcut
@@ -3343,7 +3791,7 @@ private extension TaskStore {
 
 private enum LoginLaunchAgent {
     private static var label: String {
-        Bundle.main.bundleIdentifier ?? "local.loop.menubar"
+        Bundle.main.bundleIdentifier ?? "com.marekszkudelski.loop"
     }
 
     static var isEnabled: Bool {
@@ -3359,7 +3807,8 @@ private enum LoginLaunchAgent {
     }
 
     private static func install() throws {
-        guard let executableURL = Bundle.main.executableURL else {
+        let appURL = Bundle.main.bundleURL.standardizedFileURL
+        guard appURL.pathExtension.lowercased() == "app" else {
             throw CocoaError(.fileNoSuchFile)
         }
 
@@ -3370,7 +3819,7 @@ private enum LoginLaunchAgent {
 
         let plist: [String: Any] = [
             "Label": label,
-            "ProgramArguments": [executableURL.path],
+            "ProgramArguments": ["/usr/bin/open", "-gj", appURL.path],
             "RunAtLoad": true,
             "KeepAlive": false,
             "ProcessType": "Interactive",
@@ -3425,6 +3874,7 @@ private enum LoginLaunchAgent {
 extension Notification.Name {
     static let loopShouldClosePopover = Notification.Name("Loop.shouldClosePopover")
     static let loopShouldEditTask = Notification.Name("Loop.shouldEditTask")
+    static let loopShouldEditRoutine = Notification.Name("Loop.shouldEditRoutine")
     static let loopFocusModeDidEnd = Notification.Name("Loop.focusModeDidEnd")
     static let loopFocusDidStart = Notification.Name("Loop.focusDidStart")
 }

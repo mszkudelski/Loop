@@ -5,6 +5,7 @@ import Foundation
 @MainActor
 final class MeetingMonitor: @unchecked Sendable {
     var onMeetingStateChange: ((Bool) -> Void)?
+    var onInitialEvaluationComplete: (() -> Void)?
 
     private var timer: Timer?
     private let evaluationQueue = DispatchQueue(label: "local.loop.meeting-monitor", qos: .utility)
@@ -13,12 +14,14 @@ final class MeetingMonitor: @unchecked Sendable {
     private var consecutiveDetectionCount = 0
     private var isSuppressingCurrentMeeting = false
     private var isEvaluating = false
+    private var isAwaitingInitialEvaluation = false
     private var evaluationGeneration = 0
 
     func start() {
         stop()
         evaluationGeneration += 1
         isEvaluating = false
+        isAwaitingInitialEvaluation = true
         evaluate()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -36,6 +39,7 @@ final class MeetingMonitor: @unchecked Sendable {
         stop()
         evaluationGeneration += 1
         isEvaluating = false
+        isAwaitingInitialEvaluation = false
         lastReportedState = false
         consecutiveDetectedState = nil
         consecutiveDetectionCount = 0
@@ -65,6 +69,14 @@ final class MeetingMonitor: @unchecked Sendable {
 
     private func handleDetectedState(_ detectedState: Bool) {
         isEvaluating = false
+        let completesInitialEvaluation = isAwaitingInitialEvaluation
+        isAwaitingInitialEvaluation = false
+        defer {
+            if completesInitialEvaluation {
+                onInitialEvaluationComplete?()
+            }
+        }
+
         if isSuppressingCurrentMeeting {
             if detectedState {
                 return

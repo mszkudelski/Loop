@@ -25,6 +25,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
     var iterationTimerStartedAt: Date?
     var iterationTimerStartedLoop: Int?
     var scheduledFor: Date?
+    var forcedDueLoop: Int?
     var createdAt: Date
     var updatedAt: Date
 
@@ -53,6 +54,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         iterationTimerStartedAt: Date? = nil,
         iterationTimerStartedLoop: Int? = nil,
         scheduledFor: Date? = nil,
+        forcedDueLoop: Int? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -80,6 +82,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         self.iterationTimerStartedAt = iterationTimerStartedAt
         self.iterationTimerStartedLoop = iterationTimerStartedLoop
         self.scheduledFor = scheduledFor
+        self.forcedDueLoop = forcedDueLoop
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
@@ -110,6 +113,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         case iterationTimerStartedAt
         case iterationTimerStartedLoop
         case scheduledFor
+        case forcedDueLoop
         case createdAt
         case updatedAt
     }
@@ -141,6 +145,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         iterationTimerStartedAt = try container.decodeIfPresent(Date.self, forKey: .iterationTimerStartedAt)
         iterationTimerStartedLoop = try container.decodeIfPresent(Int.self, forKey: .iterationTimerStartedLoop)
         scheduledFor = try container.decodeIfPresent(Date.self, forKey: .scheduledFor)
+        forcedDueLoop = try container.decodeIfPresent(Int.self, forKey: .forcedDueLoop)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
     }
 
@@ -170,6 +175,7 @@ struct LoopTask: Identifiable, Codable, Equatable {
         try container.encodeIfPresent(iterationTimerStartedAt, forKey: .iterationTimerStartedAt)
         try container.encodeIfPresent(iterationTimerStartedLoop, forKey: .iterationTimerStartedLoop)
         try container.encodeIfPresent(scheduledFor, forKey: .scheduledFor)
+        try container.encodeIfPresent(forcedDueLoop, forKey: .forcedDueLoop)
         try container.encode(createdAt, forKey: .createdAt)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
@@ -178,12 +184,19 @@ struct LoopTask: Identifiable, Codable, Equatable {
 struct LoopCompletion: Identifiable, Codable, Equatable {
     var id: UUID
     var loopNumber: Int
+    var startedAt: Date?
     var completedAt: Date
 
-    init(id: UUID = UUID(), loopNumber: Int, completedAt: Date = Date()) {
+    init(id: UUID = UUID(), loopNumber: Int, startedAt: Date? = nil, completedAt: Date = Date()) {
         self.id = id
         self.loopNumber = loopNumber
+        self.startedAt = startedAt
         self.completedAt = completedAt
+    }
+
+    var duration: TimeInterval? {
+        guard let startedAt, completedAt >= startedAt else { return nil }
+        return completedAt.timeIntervalSince(startedAt)
     }
 }
 
@@ -334,6 +347,93 @@ struct DailyScheduleTime: Identifiable, Codable, Equatable, Hashable, Comparable
     }
 }
 
+struct FocusTimeSchedule: Codable, Equatable {
+    var isEnabled: Bool
+    var startTime: DailyScheduleTime
+    var endTime: DailyScheduleTime
+    var includesRoutines: Bool
+    var allowsBreaks: Bool
+    var confirmsMeetings: Bool
+
+    init(
+        isEnabled: Bool = false,
+        startTime: DailyScheduleTime = DailyScheduleTime(hour: 7),
+        endTime: DailyScheduleTime = DailyScheduleTime(hour: 10),
+        includesRoutines: Bool = false,
+        allowsBreaks: Bool = true,
+        confirmsMeetings: Bool = false
+    ) {
+        self.isEnabled = isEnabled
+        self.startTime = startTime
+        self.endTime = endTime
+        self.includesRoutines = includesRoutines
+        self.allowsBreaks = allowsBreaks
+        self.confirmsMeetings = confirmsMeetings
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case isEnabled
+        case startTime
+        case endTime
+        case includesRoutines
+        case allowsBreaks
+        case confirmsMeetings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        startTime = try container.decodeIfPresent(DailyScheduleTime.self, forKey: .startTime)
+            ?? DailyScheduleTime(hour: 7)
+        endTime = try container.decodeIfPresent(DailyScheduleTime.self, forKey: .endTime)
+            ?? DailyScheduleTime(hour: 10)
+        includesRoutines = try container.decodeIfPresent(Bool.self, forKey: .includesRoutines) ?? false
+        allowsBreaks = try container.decodeIfPresent(Bool.self, forKey: .allowsBreaks) ?? true
+        confirmsMeetings = try container.decodeIfPresent(Bool.self, forKey: .confirmsMeetings) ?? false
+    }
+
+    func contains(_ date: Date, calendar: Calendar = .current) -> Bool {
+        guard isEnabled else { return false }
+
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        guard let hour = components.hour, let minute = components.minute else { return false }
+
+        let currentMinute = (hour * 60) + minute
+        let startMinute = (startTime.hour * 60) + startTime.minute
+        let endMinute = (endTime.hour * 60) + endTime.minute
+
+        guard startMinute != endMinute else { return false }
+        if startMinute < endMinute {
+            return currentMinute >= startMinute && currentMinute < endMinute
+        }
+        return currentMinute >= startMinute || currentMinute < endMinute
+    }
+
+    func endOfActiveBlock(containing date: Date, calendar: Calendar = .current) -> Date? {
+        guard contains(date, calendar: calendar) else { return nil }
+
+        let currentComponents = calendar.dateComponents([.hour, .minute], from: date)
+        guard let hour = currentComponents.hour, let minute = currentComponents.minute else { return nil }
+
+        let currentMinute = (hour * 60) + minute
+        let startMinute = (startTime.hour * 60) + startTime.minute
+        let endMinute = (endTime.hour * 60) + endTime.minute
+        var endDay = calendar.startOfDay(for: date)
+
+        if startMinute > endMinute, currentMinute >= startMinute {
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: endDay) else { return nil }
+            endDay = nextDay
+        }
+
+        return calendar.date(
+            bySettingHour: endTime.hour,
+            minute: endTime.minute,
+            second: 0,
+            of: endDay
+        )
+    }
+}
+
 struct RoutineSession: Identifiable, Codable, Equatable {
     var id: UUID
     var routineBlockID: UUID
@@ -390,6 +490,28 @@ struct TaskCompletionStat: Identifiable, Equatable {
     var title: String
     var loopsTaken: Int
     var finishedAt: Date
+}
+
+enum DayTimelineEntryKind: Equatable {
+    case focusedWork
+    case activeWork
+    case routine
+    case meeting
+    case breakTime
+    case loopCompleted
+    case taskFinished
+}
+
+struct DayTimelineEntry: Identifiable, Equatable {
+    var id: String
+    var kind: DayTimelineEntryKind
+    var title: String
+    var startedAt: Date
+    var endedAt: Date?
+
+    var duration: TimeInterval? {
+        endedAt.map { max(0, $0.timeIntervalSince(startedAt)) }
+    }
 }
 
 struct LoopCadence: Codable, Identifiable, Hashable {
