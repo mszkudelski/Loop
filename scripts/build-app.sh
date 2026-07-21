@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="${APP_NAME:-Loop}"
 EXECUTABLE_NAME="${EXECUTABLE_NAME:-$APP_NAME}"
-BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-local.loop.menubar}"
+BUNDLE_IDENTIFIER="${BUNDLE_IDENTIFIER:-com.marekszkudelski.loop}"
 MARKETING_VERSION="${MARKETING_VERSION:-0.1.0}"
 BUILD_VERSION="${BUILD_VERSION:-1}"
 APP="$ROOT/dist/$APP_NAME.app"
@@ -54,7 +54,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>LSMultipleInstancesProhibited</key>
   <true/>
   <key>LSUIElement</key>
-  <true/>
+  <false/>
   <key>NSHighResolutionCapable</key>
   <true/>
 </dict>
